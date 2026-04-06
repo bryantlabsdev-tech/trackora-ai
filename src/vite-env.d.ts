@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** API origin for native builds, e.g. http://192.168.1.10:3001 — no trailing slash */
+  /** Optional API origin override (no trailing slash). Default is https://trackora-ai.onrender.com */
   readonly VITE_API_BASE_URL?: string
 }
 

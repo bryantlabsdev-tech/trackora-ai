@@ -238,7 +238,6 @@ function buildCoachingLogMessages(action, payload) {
 }
 
 const app = express()
-const PORT = Number(process.env.API_PORT || 3001)
 
 app.use(cors({ origin: true }))
 app.use(express.json({ limit: '256kb' }))
@@ -298,7 +297,9 @@ app.post('/api/ai', async (req, res) => {
   }
 })
 
-const LISTEN_HOST = process.env.LISTEN_HOST?.trim() || '127.0.0.1'
-app.listen(PORT, LISTEN_HOST, () => {
-  console.log(`Trackora API at http://${LISTEN_HOST}:${PORT}`)
+const PORT = process.env.PORT || 3001
+const HOST = '0.0.0.0'
+
+app.listen(PORT, HOST, () => {
+  console.log(`Server running on http://${HOST}:${PORT}`)
 })

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { requestCoachingLog } from './api/requestCoachingLog'
 import type { CoachingLogApiPayload, FormMode, SimpleCoachingInput } from './types/coaching'
 import {
@@ -8,6 +8,8 @@ import {
 } from './lib/formatCoachingFormClipboard'
 import { parseCoachingLogMarkdown } from './lib/parseCoachingLog'
 import './App.css'
+
+const SESSION_WARMUP_TIP_KEY = 'trackora_warmup_tip_shown'
 
 function emptyInput(): SimpleCoachingInput {
   return { employeeName: '', coachingReason: '', notes: '' }
@@ -22,6 +24,15 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   /** Per-section copy feedback, keyed by `${sec.id}-${index}` */
   const [copiedSectionKeys, setCopiedSectionKeys] = useState<Record<string, boolean>>({})
+  const [showWarmupNotice, setShowWarmupNotice] = useState(false)
+  /** If sessionStorage is blocked, still only show the tip once per tab load */
+  const warmupFallbackUsedRef = useRef(false)
+
+  useEffect(() => {
+    if (!showWarmupNotice) return
+    const id = window.setTimeout(() => setShowWarmupNotice(false), 5000)
+    return () => clearTimeout(id)
+  }, [showWarmupNotice])
 
   const canGenerate = useMemo(() => {
     return input.employeeName.trim().length > 0 && input.coachingReason.trim().length > 0
@@ -42,14 +53,38 @@ export default function App() {
       return
     }
     setShowValidation(false)
+
+    let shouldShowWarmupTip = false
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        if (!sessionStorage.getItem(SESSION_WARMUP_TIP_KEY)) {
+          sessionStorage.setItem(SESSION_WARMUP_TIP_KEY, '1')
+          shouldShowWarmupTip = true
+        }
+      } else if (!warmupFallbackUsedRef.current) {
+        warmupFallbackUsedRef.current = true
+        shouldShowWarmupTip = true
+      }
+    } catch {
+      if (!warmupFallbackUsedRef.current) {
+        warmupFallbackUsedRef.current = true
+        shouldShowWarmupTip = true
+      }
+    }
+    if (shouldShowWarmupTip) setShowWarmupNotice(true)
+
     setLoading(true)
     setLogText(null)
     setLogSource(null)
     setCopiedSectionKeys({})
-    const result = await requestCoachingLog(payload)
-    setLogText(result.text)
-    setLogSource(result.source)
-    setLoading(false)
+    try {
+      const result = await requestCoachingLog(payload)
+      setLogText(result.text)
+      setLogSource(result.source)
+    } finally {
+      setLoading(false)
+      setShowWarmupNotice(false)
+    }
   }, [canGenerate, payload])
 
   const copySection = useCallback(async (rowKey: string, sectionLabel: string, body: string) => {
@@ -193,6 +228,14 @@ export default function App() {
       <p className="fine-print">
         API runs on your server; key stays in <code>.env</code>.
       </p>
+
+      {showWarmupNotice && (
+        <div className="warmup-toast" role="status" aria-live="polite">
+          <p className="warmup-toast-text">
+            First AI request may take up to a minute while the server wakes up.
+          </p>
+        </div>
+      )}
     </div>
   )
 }
