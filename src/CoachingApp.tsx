@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { requestCoachingLog } from './api/requestCoachingLog'
 import { useProfile } from './context/ProfileContext'
 import type { CoachingLogApiPayload, FormMode, SimpleCoachingInput } from './types/coaching'
-import { canUseAiGeneration, freeGenerationsRemainingLabel, isFreeLimitReached } from './types/profile'
+import {
+  canUseAiGeneration,
+  freeGenerationsRemaining,
+  freeGenerationsRemainingLabel,
+  isFreeLimitReached,
+} from './types/profile'
 import {
   copyPlainTextToClipboard,
   formatSectionClipboardBlock,
@@ -95,6 +100,7 @@ export default function CoachingApp() {
   const [logText, setLogText] = useState<string | null>(null)
   const [logSource, setLogSource] = useState<'openai' | 'fallback' | null>(null)
   const [loading, setLoading] = useState(false)
+  const [lastGenerationMs, setLastGenerationMs] = useState<number | null>(null)
   /** Per-section copy feedback, keyed by `${sec.id}-${index}` */
   const [copiedSectionKeys, setCopiedSectionKeys] = useState<Record<string, boolean>>({})
   const [showWarmupNotice, setShowWarmupNotice] = useState(false)
@@ -125,7 +131,17 @@ export default function CoachingApp() {
       setShowValidation(true)
       return
     }
-    if (profileLoading || !profile || !canUseAiGeneration(profile)) {
+    const blocked = profileLoading || !profile || !canUseAiGeneration(profile)
+    const usageCount = profile?.usage_count ?? null
+    const isPro = profile?.is_pro ?? null
+    const remainingForLog =
+      profile && !profile.is_pro ? freeGenerationsRemaining(profile) : Number.POSITIVE_INFINITY
+    console.log('[usage] is_pro:', isPro)
+    console.log('[usage] current free usage count:', usageCount)
+    console.log('[usage] remaining generations:', remainingForLog)
+    console.log('[usage] generation blocked:', blocked)
+
+    if (blocked) {
       return
     }
     setShowValidation(false)
@@ -150,14 +166,24 @@ export default function CoachingApp() {
     if (shouldShowWarmupTip) setShowWarmupNotice(true)
 
     setLoading(true)
+    const startedAt = Date.now()
     setLogText(null)
     setLogSource(null)
+    setLastGenerationMs(null)
     setCopiedSectionKeys({})
     try {
       const result = await requestCoachingLog(payload)
       setLogText(result.text)
       setLogSource(result.source)
-      if (result.source === 'openai') {
+      setLastGenerationMs(Date.now() - startedAt)
+
+      const generationSuccessful = typeof result.text === 'string' && result.text.trim().length > 0
+      const shouldIncrementUsage = generationSuccessful && Boolean(profile && !profile.is_pro)
+      console.log('[usage] result.source:', result.source)
+      console.log('[usage] generation successful:', generationSuccessful)
+      console.log('[usage] incrementing usage:', shouldIncrementUsage)
+
+      if (shouldIncrementUsage) {
         await recordOpenAiGeneration()
       }
     } finally {
@@ -191,7 +217,10 @@ export default function CoachingApp() {
       <header className="header">
         <p className="eyebrow">Trackora</p>
         <h1>Coaching form</h1>
-        <p className="lede">Quick Walmart/OSL-style coaching form—name, topic, optional notes, then generate.</p>
+        <p className="lede">
+          Generate structured, professional coaching forms in seconds using AI. Built for Walmart / OSL
+          leaders.
+        </p>
       </header>
 
       <div className="layout">
@@ -207,11 +236,15 @@ export default function CoachingApp() {
               Loading your plan…
             </p>
           )}
-          {profile && !profileLoading && (
+          {profile && !profileLoading && profile.is_pro && (
+            <div className="plan-pro-card" aria-live="polite">
+              <span className="plan-pro-title">Pro Plan Active</span>
+              <span className="plan-pro-subtext">Unlimited AI generations</span>
+            </div>
+          )}
+          {profile && !profileLoading && !profile.is_pro && (
             <div className="plan-row" aria-live="polite">
-              <span className={'plan-badge' + (profile.is_pro ? ' plan-badge-pro' : '')}>
-                {profile.is_pro ? 'Pro' : 'Free'}
-              </span>
+              <span className="plan-badge">Free</span>
               <span className="plan-detail">{freeGenerationsRemainingLabel(profile)}</span>
             </div>
           )}
@@ -269,20 +302,18 @@ export default function CoachingApp() {
           </label>
           {profile && isFreeLimitReached(profile) && (
             <div className="plan-limit-banner">
-              <p className="plan-limit-text">
-                You&apos;ve reached your free limit. Upgrade to Trackora AI Pro for unlimited generations.
-              </p>
+              <p className="plan-limit-text">Free limit reached. Upgrade to Pro to continue.</p>
               <UpgradeToProButton userId={profile.id} email={profile.email} />
             </div>
           )}
           <button
             type="button"
-            className="btn-primary"
+            className="btn-primary btn-generate-premium"
             disabled={loading || generationBlocked}
             onClick={() => void generate()}
           >
             {loading && <span className="spinner" aria-hidden />}
-            {loading ? 'Generating…' : 'Generate coaching form'}
+            {loading ? 'Generating...' : 'Generate AI Coaching Form'}
           </button>
           {showValidation && !canGenerate && (
             <p className="hint-error">Enter employee name and what the coaching form is for.</p>
@@ -300,10 +331,22 @@ export default function CoachingApp() {
             </div>
           )}
           {!loading && !logText && (
-            <p className="output-empty">Generated form appears here. Nothing until you click generate.</p>
+            <p className="output-empty">
+              Your AI-generated coaching form will appear here.
+              <br />
+              <br />
+              Fill in the details and click generate.
+            </p>
           )}
           {!loading && logText && (
-            <>
+            <div className="output-result-fade">
+              {lastGenerationMs != null && (
+                <p className="output-generated-meta">
+                  {lastGenerationMs < 1500
+                    ? 'Generated instantly ⚡'
+                    : `Generated in ${(lastGenerationMs / 1000).toFixed(1)} seconds`}
+                </p>
+              )}
               {logSource && (
                 <p className="output-source">
                   {logSource === 'openai' ? 'Assistant draft' : 'Offline draft'}
@@ -332,7 +375,7 @@ export default function CoachingApp() {
                   )
                 })}
               </div>
-            </>
+            </div>
           )}
         </section>
       </div>

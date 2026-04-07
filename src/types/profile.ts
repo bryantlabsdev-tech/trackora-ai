@@ -29,7 +29,7 @@ export function freeGenerationsRemaining(profile: Profile): number {
 export function freeGenerationsRemainingLabel(profile: Profile): string {
   if (profile.is_pro) return 'Unlimited AI generations'
   const n = Math.max(0, FREE_AI_GENERATION_LIMIT - profile.usage_count)
-  return `${n} free AI generation${n === 1 ? '' : 's'} remaining`
+  return `${n} free generation${n === 1 ? '' : 's'} left`
 }
 
 export function isFreeLimitReached(profile: Profile): boolean {

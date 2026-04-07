@@ -48,15 +48,15 @@
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-3xl);
-  padding: 1.5rem 1.6rem;
+  padding: 1.6rem 1.7rem;
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset;
 }
 
 .card-title {
   margin: 0 0 1.25rem;
-  font-size: 0.6875rem;
+  font-size: 0.7rem;
   font-weight: 600;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -221,10 +221,31 @@
 
 .output-source {
   margin: 0 0 1rem;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.12em;
+}
+
+.output-result-fade {
+  animation: output-fade-in 220ms ease-out;
+}
+
+@keyframes output-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.output-generated-meta {
+  margin: 0 0 0.55rem;
+  font-size: 0.78rem;
+  color: var(--muted);
 }
 
 .sections {
@@ -252,9 +273,9 @@
   margin: 0;
   flex: 1;
   min-width: 0;
-  font-size: 0.75rem;
+  font-size: 0.74rem;
   font-weight: 600;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--accent-hover);
 }
@@ -364,10 +385,40 @@
   align-items: center;
   gap: 0.5rem 0.75rem;
   margin: 0 0 1.1rem;
-  padding: 0.65rem 0.85rem;
+  padding: 0.75rem 0.9rem;
   border-radius: var(--radius-xl);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
+}
+
+.plan-pro-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  margin: 0 0 1.1rem;
+  padding: 0.82rem 0.95rem;
+  border-radius: var(--radius-xl);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--bg-elevated), var(--bg-elevated)) padding-box,
+    linear-gradient(135deg, rgba(99, 102, 241, 0.55), rgba(59, 130, 246, 0.32)) border-box;
+  box-shadow:
+    0 8px 20px rgba(59, 130, 246, 0.12),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+.plan-pro-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+}
+
+.plan-pro-subtext {
+  font-size: 0.85rem;
+  color: var(--text);
+  opacity: 0.92;
 }
 
 .plan-badge {
@@ -422,6 +473,36 @@
   text-decoration: none;
   box-sizing: border-box;
   display: inline-block;
+}
+
+.btn-generate-premium {
+  box-shadow:
+    0 0 0 1px rgba(129, 140, 248, 0.2) inset,
+    0 8px 24px rgba(99, 102, 241, 0.3);
+  transform: translateY(0) scale(1);
+  transition:
+    transform 200ms ease,
+    box-shadow 200ms ease,
+    filter 200ms ease;
+}
+
+.btn-generate-premium:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow:
+    0 0 0 1px rgba(165, 180, 252, 0.28) inset,
+    0 10px 28px rgba(129, 140, 248, 0.38);
+  filter: brightness(1.05);
+}
+
+.btn-generate-premium:focus-visible {
+  box-shadow:
+    0 0 0 2px rgba(129, 140, 248, 0.45),
+    0 10px 28px rgba(129, 140, 248, 0.35);
+}
+
+.btn-generate-premium:active:not(:disabled) {
+  transform: translateY(0) scale(0.99);
+  filter: brightness(1.02);
 }
 
 a.btn-plan-upgrade:hover {
