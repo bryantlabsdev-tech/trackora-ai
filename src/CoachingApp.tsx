@@ -52,7 +52,7 @@ function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
         setCheckoutError('No checkout URL returned.')
         return
       }
-      window.location.assign(data.url)
+      window.location.href = data.url
     } catch {
       setCheckoutError('Network error. Try again.')
     } finally {
