@@ -265,7 +265,7 @@ app.post('/create-checkout-session', async (req, res) => {
     return res.status(503).json({ error: 'APP_URL is not configured.' })
   }
   try {
-    const stripeCheckoutPriceId = 'price_1TJNG1Hum5t4i0BD20iMnlvV'
+    const stripeCheckoutPriceId = 'price_1TJOQDHum5t4i0BDlwb3Hkgc'
     console.log('[create-checkout-session] Stripe price id:', stripeCheckoutPriceId)
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
