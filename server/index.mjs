@@ -6,6 +6,7 @@ import dotenv from 'dotenv'
 import express from 'express'
 import cors from 'cors'
 import OpenAI from 'openai'
+import Stripe from 'stripe'
 import { formatPersonName, polishGeneratedCoachingForm } from '../shared/coachingOutput.mjs'
 import { sanitizeCoachingPayload } from '../shared/sanitizeCoachingPayload.mjs'
 
@@ -22,6 +23,9 @@ const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'
 
 const openaiApiKey = process.env.OPENAI_API_KEY?.trim() || ''
 const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null
+
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY?.trim() || ''
+const stripe = stripeSecretKey ? new Stripe(stripeSecretKey) : null
 
 const SECTION_SHAPE = [
   'Pre-Coaching Notes:',
@@ -241,6 +245,32 @@ const app = express()
 
 app.use(cors({ origin: true }))
 app.use(express.json({ limit: '256kb' }))
+
+app.post('/create-checkout-session', async (req, res) => {
+  if (!stripe) {
+    return res.status(503).json({ error: 'Stripe is not configured (missing STRIPE_SECRET_KEY).' })
+  }
+  const appUrl = process.env.APP_URL?.trim()?.replace(/\/$/, '') || ''
+  if (!appUrl) {
+    return res.status(503).json({ error: 'APP_URL is not configured.' })
+  }
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [{ price: 'price_1TJNG1Hum5t4i0BD20iMnlvV', quantity: 1 }],
+      success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${appUrl}`,
+    })
+    if (!session.url) {
+      return res.status(500).json({ error: 'Checkout session missing URL.' })
+    }
+    return res.json({ url: session.url })
+  } catch (e) {
+    const message = typeof e?.message === 'string' ? e.message : 'Checkout session failed'
+    console.error('[create-checkout-session]', message)
+    return res.status(500).json({ error: message })
+  }
+})
 
 app.post('/api/ai', async (req, res) => {
   const action = req.body?.action

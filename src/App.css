@@ -346,6 +346,88 @@
   text-align: center;
 }
 
+.plan-profile-error {
+  margin: 0 0 0.85rem;
+  font-size: 0.8125rem;
+  color: var(--danger);
+}
+
+.plan-loading {
+  margin: 0 0 0.85rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.plan-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0 0 1.1rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius-xl);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+}
+
+.plan-badge {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-lg);
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--muted);
+}
+
+.plan-badge-pro {
+  background: var(--accent-muted);
+  color: var(--accent-hover);
+}
+
+.plan-detail {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.plan-limit-banner {
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-xl);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.plan-limit-text {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.upgrade-checkout-wrap {
+  width: 100%;
+}
+
+.upgrade-checkout-error {
+  margin-top: 0.65rem;
+  margin-bottom: 0;
+}
+
+.btn-plan-upgrade {
+  width: 100%;
+  text-align: center;
+  text-decoration: none;
+  box-sizing: border-box;
+  display: inline-block;
+}
+
+a.btn-plan-upgrade:hover {
+  color: #fff;
+}
+
 .fine-print {
   margin-top: 2rem;
   font-size: 0.72rem;
