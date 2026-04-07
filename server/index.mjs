@@ -339,6 +339,26 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
 app.use(cors({ origin: true }))
 app.use(express.json({ limit: '256kb' }))
 
+app.get('/', (_req, res) => {
+  res.send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TrackoraAI</title>
+  </head>
+  <body style="font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.5;">
+    <h1>TrackoraAI</h1>
+    <p><strong>AI-powered coaching form generator for sales teams</strong></p>
+    <p>
+      TrackoraAI helps team leads quickly generate structured coaching and recognition forms using AI.
+      Users can enter employee context, generate polished output, and copy section-by-section content
+      for real-world store leadership workflows.
+    </p>
+  </body>
+</html>`)
+})
+
 app.post('/create-checkout-session', async (req, res) => {
   const stripeKeyEnv = process.env.STRIPE_SECRET_KEY?.trim() || ''
   console.log('[create-checkout-session] STRIPE_SECRET_KEY present:', Boolean(stripeKeyEnv))
