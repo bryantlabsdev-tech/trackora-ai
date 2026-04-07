@@ -391,7 +391,7 @@ app.post('/create-checkout-session', async (req, res) => {
   })
 
   try {
-    const stripeCheckoutPriceId = 'price_1TJOQDHum5t4i0BDlwb3Hkgc'
+    const stripeCheckoutPriceId = 'price_1TJaIIHG6iuq9JCNXyc4I5Hb'
     console.log('[create-checkout-session] Stripe price id:', stripeCheckoutPriceId)
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
