@@ -247,6 +247,16 @@ app.use(cors({ origin: true }))
 app.use(express.json({ limit: '256kb' }))
 
 app.post('/create-checkout-session', async (req, res) => {
+  const stripeKeyEnv = process.env.STRIPE_SECRET_KEY?.trim() || ''
+  console.log('[create-checkout-session] STRIPE_SECRET_KEY present:', Boolean(stripeKeyEnv))
+  if (stripeKeyEnv.startsWith('sk_test_')) {
+    console.log('[create-checkout-session] Stripe key mode: test')
+  } else if (stripeKeyEnv.startsWith('sk_live_')) {
+    console.log('[create-checkout-session] Stripe key mode: live')
+  } else {
+    console.log('[create-checkout-session] Stripe key mode: unknown')
+  }
+
   if (!stripe) {
     return res.status(503).json({ error: 'Stripe is not configured (missing STRIPE_SECRET_KEY).' })
   }
@@ -255,9 +265,11 @@ app.post('/create-checkout-session', async (req, res) => {
     return res.status(503).json({ error: 'APP_URL is not configured.' })
   }
   try {
+    const stripeCheckoutPriceId = 'price_1TJNG1Hum5t4i0BD20iMnlvV'
+    console.log('[create-checkout-session] Stripe price id:', stripeCheckoutPriceId)
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
-      line_items: [{ price: 'price_1TJNG1Hum5t4i0BD20iMnlvV', quantity: 1 }],
+      line_items: [{ price: stripeCheckoutPriceId, quantity: 1 }],
       success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}`,
     })
