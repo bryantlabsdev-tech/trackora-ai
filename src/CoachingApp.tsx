@@ -9,7 +9,6 @@ import {
   sectionClipboardHasContent,
 } from './lib/formatCoachingFormClipboard'
 import { parseCoachingLogMarkdown } from './lib/parseCoachingLog'
-import { getCreateCheckoutSessionUrl } from './lib/apiBase'
 import './App.css'
 
 type UpgradeToProButtonProps = {
@@ -38,7 +37,8 @@ function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
         email: email.trim(),
       }
 
-      const res = await fetch(getCreateCheckoutSessionUrl(), {
+      console.log('Calling backend checkout...')
+      const res = await fetch('https://trackora-ai.onrender.com/create-checkout-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -52,6 +52,7 @@ function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
         setCheckoutError('No checkout URL returned.')
         return
       }
+      console.log('Redirecting to Stripe...')
       window.location.href = data.url
     } catch {
       setCheckoutError('Network error. Try again.')
