@@ -22,17 +22,26 @@ function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
 
   async function startCheckout() {
+    const trimmedUserId = userId.trim()
+    console.log('[upgrade] checkout userId present:', Boolean(trimmedUserId))
+
+    if (!trimmedUserId) {
+      setCheckoutError('Could not start checkout: missing user id. Please sign in again.')
+      return
+    }
+
     setCheckoutError(null)
     setCheckoutLoading(true)
     try {
-      const body: { userId: string; email?: string } = { userId }
-      const trimmedEmail = email.trim()
-      if (trimmedEmail) body.email = trimmedEmail
+      const payload = {
+        userId: trimmedUserId,
+        email: email.trim(),
+      }
 
       const res = await fetch(getCreateCheckoutSessionUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(payload),
       })
       const data = (await res.json()) as { url?: string; error?: string }
       if (!res.ok) {
