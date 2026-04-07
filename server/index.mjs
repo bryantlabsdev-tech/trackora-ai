@@ -7,6 +7,7 @@ import express from 'express'
 import cors from 'cors'
 import OpenAI from 'openai'
 import Stripe from 'stripe'
+import { createClient } from '@supabase/supabase-js'
 import { formatPersonName, polishGeneratedCoachingForm } from '../shared/coachingOutput.mjs'
 import { sanitizeCoachingPayload } from '../shared/sanitizeCoachingPayload.mjs'
 
@@ -26,6 +27,15 @@ const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY?.trim() || ''
 const stripe = stripeSecretKey ? new Stripe(stripeSecretKey) : null
+
+const supabaseUrl = process.env.SUPABASE_URL?.trim() || ''
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || ''
+const supabaseAdmin =
+  supabaseUrl && supabaseServiceKey
+    ? createClient(supabaseUrl, supabaseServiceKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    : null
 
 const SECTION_SHAPE = [
   'Pre-Coaching Notes:',
@@ -243,6 +253,89 @@ function buildCoachingLogMessages(action, payload) {
 
 const app = express()
 
+app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim() || ''
+  if (!stripe || !webhookSecret) {
+    console.error('[webhook/stripe] Missing Stripe client or STRIPE_WEBHOOK_SECRET')
+    return res.status(503).send('Webhook not configured')
+  }
+
+  const sig = req.headers['stripe-signature']
+  if (!sig || typeof sig !== 'string') {
+    console.error('[webhook/stripe] Missing stripe-signature header')
+    return res.status(400).send('Missing signature')
+  }
+
+  let event
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret)
+  } catch (err) {
+    const msg = typeof err?.message === 'string' ? err.message : 'invalid payload'
+    console.error('[webhook/stripe] Signature verification failed:', msg)
+    return res.status(400).send(`Webhook Error: ${msg}`)
+  }
+
+  console.log('[webhook/stripe] event type:', event.type)
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object
+    console.log('[webhook/stripe] checkout.session.completed session id:', session.id)
+
+    const userId = session.metadata?.userId
+    console.log('[webhook/stripe] metadata.userId:', userId != null && userId !== '' ? userId : '(missing)')
+
+    const customerId =
+      typeof session.customer === 'string'
+        ? session.customer
+        : session.customer && typeof session.customer === 'object' && 'id' in session.customer
+          ? session.customer.id
+          : null
+    const subscriptionId =
+      typeof session.subscription === 'string'
+        ? session.subscription
+        : session.subscription && typeof session.subscription === 'object' && 'id' in session.subscription
+          ? session.subscription.id
+          : null
+
+    console.log('[webhook/stripe] customer id:', customerId ?? '(none)')
+    console.log('[webhook/stripe] subscription id:', subscriptionId ?? '(none)')
+
+    if (!userId || String(userId).trim() === '') {
+      console.error(
+        '[webhook/stripe] FAIL: metadata.userId is missing or empty — cannot unlock Pro; fix checkout metadata',
+      )
+      return res.status(200).json({ received: true, skipped: 'missing_userId' })
+    }
+
+    if (!supabaseAdmin) {
+      console.error('[webhook/stripe] Supabase admin not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)')
+      return res.status(200).json({ received: true, skipped: 'no_supabase_admin' })
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('profiles')
+      .update({
+        is_pro: true,
+        stripe_customer_id: customerId,
+        stripe_subscription_id: subscriptionId,
+      })
+      .eq('id', String(userId).trim())
+      .select('id')
+
+    if (error) {
+      console.error('[webhook/stripe] Supabase update failed:', error.message)
+      return res.status(200).json({ received: true, supabaseError: error.message })
+    }
+    if (!data?.length) {
+      console.error('[webhook/stripe] Supabase update: no row updated for profile id:', String(userId).trim())
+      return res.status(200).json({ received: true, warning: 'no_row_updated' })
+    }
+    console.log('[webhook/stripe] Supabase update succeeded for profile id:', String(userId).trim())
+  }
+
+  return res.status(200).json({ received: true })
+})
+
 app.use(cors({ origin: true }))
 app.use(express.json({ limit: '256kb' }))
 
@@ -264,6 +357,19 @@ app.post('/create-checkout-session', async (req, res) => {
   if (!appUrl) {
     return res.status(503).json({ error: 'APP_URL is not configured.' })
   }
+
+  const userId = typeof req.body?.userId === 'string' ? req.body.userId.trim() : ''
+  const emailMeta = typeof req.body?.email === 'string' ? req.body.email.trim() : ''
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required in JSON body.' })
+  }
+
+  const checkoutMetadata = { userId, ...(emailMeta ? { email: emailMeta } : {}) }
+  console.log('[create-checkout-session] checkout metadata (safe):', {
+    userId,
+    emailAttached: Boolean(emailMeta),
+  })
+
   try {
     const stripeCheckoutPriceId = 'price_1TJOQDHum5t4i0BDlwb3Hkgc'
     console.log('[create-checkout-session] Stripe price id:', stripeCheckoutPriceId)
@@ -272,6 +378,7 @@ app.post('/create-checkout-session', async (req, res) => {
       line_items: [{ price: stripeCheckoutPriceId, quantity: 1 }],
       success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}`,
+      metadata: checkoutMetadata,
     })
     if (!session.url) {
       return res.status(500).json({ error: 'Checkout session missing URL.' })

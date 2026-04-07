@@ -12,7 +12,12 @@ import { parseCoachingLogMarkdown } from './lib/parseCoachingLog'
 import { getCreateCheckoutSessionUrl } from './lib/apiBase'
 import './App.css'
 
-function UpgradeToProButton() {
+type UpgradeToProButtonProps = {
+  userId: string
+  email: string
+}
+
+function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
   const [checkoutLoading, setCheckoutLoading] = useState(false)
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
 
@@ -20,10 +25,14 @@ function UpgradeToProButton() {
     setCheckoutError(null)
     setCheckoutLoading(true)
     try {
+      const body: { userId: string; email?: string } = { userId }
+      const trimmedEmail = email.trim()
+      if (trimmedEmail) body.email = trimmedEmail
+
       const res = await fetch(getCreateCheckoutSessionUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: '{}',
+        body: JSON.stringify(body),
       })
       const data = (await res.json()) as { url?: string; error?: string }
       if (!res.ok) {
@@ -253,7 +262,7 @@ export default function CoachingApp() {
               <p className="plan-limit-text">
                 You&apos;ve reached your free limit. Upgrade to Trackora AI Pro for unlimited generations.
               </p>
-              <UpgradeToProButton />
+              <UpgradeToProButton userId={profile.id} email={profile.email} />
             </div>
           )}
           <button
