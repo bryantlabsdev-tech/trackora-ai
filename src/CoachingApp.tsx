@@ -98,7 +98,7 @@ export default function CoachingApp() {
   const [formMode, setFormMode] = useState<FormMode>('coaching')
   const [showValidation, setShowValidation] = useState(false)
   const [logText, setLogText] = useState<string | null>(null)
-  const [logSource, setLogSource] = useState<'openai' | 'fallback' | null>(null)
+  const [logSource, setLogSource] = useState<'openai' | 'deterministic' | 'fallback' | null>(null)
   const [loading, setLoading] = useState(false)
   const [lastGenerationMs, setLastGenerationMs] = useState<number | null>(null)
   /** Per-section copy feedback, keyed by `${sec.id}-${index}` */
@@ -178,10 +178,11 @@ export default function CoachingApp() {
       setLastGenerationMs(Date.now() - startedAt)
 
       const generationSuccessful = typeof result.text === 'string' && result.text.trim().length > 0
-      const shouldIncrementUsage = generationSuccessful && Boolean(profile && !profile.is_pro)
+      const shouldIncrementUsage =
+        generationSuccessful && result.source === 'openai' && Boolean(profile && !profile.is_pro)
       console.log('[usage] result.source:', result.source)
       console.log('[usage] generation successful:', generationSuccessful)
-      console.log('[usage] incrementing usage:', shouldIncrementUsage)
+      console.log('[usage] incrementing usage (OpenAI only):', shouldIncrementUsage)
 
       if (shouldIncrementUsage) {
         await recordOpenAiGeneration()
@@ -218,7 +219,7 @@ export default function CoachingApp() {
         <p className="eyebrow">Trackora</p>
         <h1>Coaching form</h1>
         <p className="lede">
-          Generate structured, professional coaching forms in seconds using AI. Built for Walmart / OSL
+          Generate structured, professional coaching forms in seconds using AI. Built for high-performing
           leaders.
         </p>
       </header>
@@ -340,16 +341,25 @@ export default function CoachingApp() {
           )}
           {!loading && logText && (
             <div className="output-result-fade">
-              {lastGenerationMs != null && (
+              {lastGenerationMs != null && logSource === 'openai' && (
                 <p className="output-generated-meta">
                   {lastGenerationMs < 1500
                     ? 'Generated instantly ⚡'
                     : `Generated in ${(lastGenerationMs / 1000).toFixed(1)} seconds`}
                 </p>
               )}
+              {lastGenerationMs != null && logSource === 'deterministic' && (
+                <p className="output-generated-meta">
+                  {`Prepared in ${(lastGenerationMs / 1000).toFixed(1)} seconds`}
+                </p>
+              )}
               {logSource && (
                 <p className="output-source">
-                  {logSource === 'openai' ? 'Assistant draft' : 'Offline draft'}
+                  {logSource === 'openai'
+                    ? 'Assistant draft'
+                    : logSource === 'deterministic'
+                      ? 'Server draft'
+                      : 'Offline draft'}
                 </p>
               )}
               <div className="sections">

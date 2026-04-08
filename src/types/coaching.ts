@@ -16,7 +16,7 @@ export type CoachingLogApiPayload = SimpleCoachingInput & {
 }
 
 /**
- * Walmart / OSL-style section labels (model output uses `Label:` lines).
+ * Retail-style section labels (model output uses `Label:` lines).
  */
 export const COACHING_FORM_SECTION_LABELS = [
   'Pre-Coaching Notes',

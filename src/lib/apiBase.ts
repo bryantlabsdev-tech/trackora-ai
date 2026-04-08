@@ -1,18 +1,34 @@
 /** Production API origin — no trailing slash. */
 const DEFAULT_API_BASE = 'https://trackora-ai.onrender.com'
 
-export function getApiBase(): string {
+/** Express route for coaching — must match server `app.post('/api/ai', ...)`. */
+const COACHING_AI_PATH = '/api/ai'
+
+function viteApiBaseTrimmed(): string {
   const raw = import.meta.env.VITE_API_BASE_URL
-  const trimmed = typeof raw === 'string' ? raw.trim() : ''
-  return trimmed !== '' ? trimmed.replace(/\/$/, '') : DEFAULT_API_BASE
+  return typeof raw === 'string' ? raw.trim().replace(/\/$/, '') : ''
+}
+
+export function getApiBase(): string {
+  const trimmed = viteApiBaseTrimmed()
+  return trimmed !== '' ? trimmed : DEFAULT_API_BASE
 }
 
 /**
- * Returns the coaching `POST` URL. Uses `VITE_API_BASE_URL` when set (no trailing slash);
- * otherwise the production host below.
+ * Coaching AI endpoint. Uses `VITE_API_BASE_URL` when set (no trailing slash).
+ * If the base is already `/api` or ends with `/api`, appends `/ai` only (avoids `/api/api/ai`).
+ * In Vite dev with no base, uses same-origin `/api/ai` for the proxy to Express.
  */
 export function getCoachingApiUrl(): string {
-  return `${getApiBase()}/api/ai`
+  const trimmed = viteApiBaseTrimmed()
+  if (trimmed === '') {
+    if (import.meta.env.DEV) return COACHING_AI_PATH
+    return `${DEFAULT_API_BASE}${COACHING_AI_PATH}`
+  }
+  if (trimmed === '/api' || trimmed.endsWith('/api')) {
+    return `${trimmed}/ai`
+  }
+  return `${trimmed}${COACHING_AI_PATH}`
 }
 
 export function getCreateCheckoutSessionUrl(): string {

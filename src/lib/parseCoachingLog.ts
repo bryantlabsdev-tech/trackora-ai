@@ -10,7 +10,7 @@ function escapeRegex(s: string): string {
 }
 
 /**
- * Parses coaching form output where each section starts with `Label:` (Walmart/OSL style).
+ * Parses coaching form output where each section starts with `Label:` (retail-style).
  * Also accepts optional markdown `## ` before the label for robustness.
  */
 export function parseCoachingLogMarkdown(text: string): ParsedCoachingSection[] {

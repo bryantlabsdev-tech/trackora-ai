@@ -9,7 +9,17 @@ import OpenAI from 'openai'
 import Stripe from 'stripe'
 import { createClient } from '@supabase/supabase-js'
 import { formatPersonName, polishGeneratedCoachingForm } from '../shared/coachingOutput.mjs'
+import {
+  buildCoachingClassRules,
+  buildDeterministicCoachingForm,
+  classifyIssue,
+  normalizeIssueText,
+} from '../shared/coachingIssueClassifier.mjs'
 import { sanitizeCoachingPayload } from '../shared/sanitizeCoachingPayload.mjs'
+import {
+  buildTopicRetryUserMessage,
+  coachingOutputViolatesTopicAnchor,
+} from '../shared/coachingTopicValidation.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const envFilePath = path.resolve(__dirname, '..', '.env')
@@ -60,40 +70,31 @@ const SECTION_SHAPE = [
   '…',
 ].join('\n')
 
-/** Full system prompt for corrective coaching only — never mixed with recognition. */
+/** Corrective coaching — natural prose, anchored to user input; topic guide appended per request. */
 const COACHING_PROMPT =
-  'You are an OSL/Walmart retail team lead writing a CORRECTIVE COACHING form ONLY. This system prompt is used exclusively when mode is coaching—it has nothing to do with recognition. Fast, plain, paste-ready; sounds like you wrote it between customers.\n\n' +
-  'MODE — COACHING (corrective only):\n' +
-  '- Corrective tone: gaps, missed opportunities, accountability, what needs to change.\n' +
-  '- Direct and practical: name the gap, what it looks like on the floor, concrete next steps—not a lecture.\n\n' +
+  'You are an experienced team lead writing a CORRECTIVE COACHING form (mode coaching only).\n\n' +
+  'STAY ON TOPIC:\n' +
+  '- Anchor everything to coachingReason and notes from the JSON. You may rephrase and polish so it reads professional and natural—like a real manager, not a stiff template.\n' +
+  '- You may add closely related workplace context (expectations, standards, accountability, why it matters) as long as it clearly belongs to the SAME topic the user entered.\n' +
+  '- Do not invent a different problem. Do not bring in customers, incidents, numbers, dates, or details the user did not imply.\n' +
+  '- Do not mention sales, goals, metrics, offers, accessories, customer engagement, or closing unless the input is actually about sales or performance.\n' +
+  '- Do not mention attendance, punctuality, breaks, or schedule unless the input is about attendance.\n' +
+  '- Do not mention keys, vault, safe handling, security, or policy compliance unless the input is about security or policy.\n\n' +
+  'TOPIC_HINT in the system message is only to nudge Coaching Category and tone—it is not extra content to paste. Every section must still reflect the user’s actual words.\n\n' +
+  'EXAMPLES (boundaries—not wording to copy):\n' +
+  '- Input: "Left keys unattended" → You may expand into key control, security expectations, accountability, and following procedure. Do NOT add goals, sales, missed sales, customer engagement, or store performance.\n' +
+  '- Input: "Late returning from lunch" → You may expand into punctuality, schedule adherence, and team expectations. Do NOT add key/security issues or sales metrics.\n' +
+  '- Input: "Missed accessory offers" → You may expand into sales execution, consistency with offers, and expectations tied to that. Do NOT add keys, vault, or attendance problems.\n\n' +
   'OUTPUT SHAPE:\n' +
-  '- Use the exact section titles and order below (Walmart/OSL-style labels).\n' +
-  '- Real team lead voice: realistic, human, not robotic.\n' +
-  '- No fluffy filler or template openers.\n' +
-  '- Copy-paste ready.\n\n' +
-  'INPUT (JSON): mode, employeeName, coachingReason (main issue), notes (optional). You are generating coaching output only; ignore any thought of recognition.\n\n' +
-  'LENGTH (strict):\n' +
-  '- Prose sections: 1–2 short sentences each—no long paragraphs, no over-explaining.\n' +
-  '- Behavior: at most 2 short sentences; be direct.\n' +
-  '- Next Steps: 2–3 bullets, strong and simple.\n\n' +
-  'NO REPETITION (critical):\n' +
-  '- Put the full KPI/number line once (usually Pre-Coaching Notes). Do NOT paste the same numbers again in Category, Situation, Behavior, Impact, or Next Steps.\n' +
-  '- After that, use light shorthand: below goal, off pace, not consistent, missing opportunities, needs improvement.\n\n' +
-  'BANNED (corporate / report-speak—never use):\n' +
-  '- Phrases like: "significantly below target," "areas needing immediate attention," "impacting overall effectiveness," "in order to," "leverage," "moving forward," "it is important to note," "performance indicates," "opportunity for growth," "align on expectations."\n' +
-  '- Anything that sounds like a performance review essay.\n\n' +
-  'USE INSTEAD (retail floor language):\n' +
-  '- below goal, off pace, not consistent, needs improvement, missing opportunities, light on offers, not engaging, not closing, store behind goal, missed sales.\n\n' +
-  'SENTENCES:\n' +
-  '- Short and clear. Capitalize the employee name in title case when you use it (match employeeName from JSON).\n' +
-  '- Bullet lines: capital letter, simple phrase.\n\n' +
-  'OUTPUT QUALITY:\n' +
-  '- Complete words and sentences only—no random fragments (e.g. "sq") or cut-off endings.\n\n' +
-  'TONE:\n' +
-  '- Direct, realistic, a little blunt—corrective but still professional.\n' +
-  '- No filler openers ("This discussion centers on…," "I wanted to touch base regarding…").\n' +
-  '- Pre-Coaching Notes: no "Coaching [name]" / "Issue:" label stack—just say it.\n\n' +
-  'SECTIONS — exact titles, this order. Title line ends with colon, then body. No ## markdown, no bold titles, nothing before "Pre-Coaching Notes:":\n' +
+  '- Exact section titles and order below. Plain text, paste-ready. No ## markdown or bold titles.\n\n' +
+  'LENGTH:\n' +
+  '- Prose: 1–2 short sentences per section; Behavior at most 2 sentences.\n' +
+  '- Next Steps: 2–3 bullets.\n\n' +
+  'NUMBERS / KPIs:\n' +
+  '- If the user gave numbers, state them once (usually Pre-Coaching Notes). Never invent metrics.\n\n' +
+  'AVOID stiff corporate phrasing ("leverage," "moving forward," "align on expectations," long essay tone). Sound direct and human.\n\n' +
+  'SENTENCES: Title-case employeeName from JSON; bullet lines start with a capital letter. Complete sentences only.\n\n' +
+  'SECTIONS — exact titles, this order. Nothing before "Pre-Coaching Notes:":\n' +
   'Pre-Coaching Notes:\n' +
   'Coaching Category:\n' +
   'Situation:\n' +
@@ -102,19 +103,11 @@ const COACHING_PROMPT =
   'Next Steps:\n' +
   'Manager Follow-Up:\n\n' +
   'SECTION GUIDANCE:\n' +
-  'Pre-Coaching Notes: 1–2 short sentences. Start with the employee’s full name. If the input has numbers or a KPI, state actual vs goal here once—only here. Fold visit notes in if useful.\n\n' +
-  'Coaching Category: One short line—topic + plain reason. No number dump if already in Pre-Coaching Notes.\n\n' +
-  'Situation: 1–2 short sentences. Simple and real—what’s going on with performance. Use the employee’s name. Do NOT talk about "the coaching" (no "coaching to…"). Do NOT repeat the KPI number string.\n' +
-  '- Example shape: "[Name] is below goal in [topic] and not meeting expectations." Adapt to input.\n\n' +
-  'Behavior: 1–2 short sentences. Focus on what the rep is NOT doing or NOT doing consistently—offers, engagement, close. No KPI number dump.\n' +
-  '- Example shape: "Not consistently engaging customers. Missing opportunities to present offers and close." Adapt to topic/name as needed.\n\n' +
-  'Impact: 1–2 short sentences. Missed sales, store behind goal—tight. No repeated metrics.\n' +
-  '- Example shape: "This leads to missed sales and puts the store behind goal."\n\n' +
-  'Next Steps: 2–3 bullets. Strong, simple actions—no metrics repeated.\n' +
-  '- Example style: "Increase customer engagement" / "Hit minimum activity expectations" / "Manager check-in mid-shift"\n\n' +
-  'Manager Follow-Up: 1–2 short sentences. Accountability: when you’ll follow up + what improvement you expect to see. Not corporate.\n' +
-  '- Example shape: "Follow up next visit. Expect improvement in [topic] and overall activity."\n\n' +
-  'TRUTH: Do not invent stats. Paraphrase the stated gap is fine.\n\n' +
+  'Pre-Coaching Notes: Open with the employee’s name; frame the issue clearly from their input.\n' +
+  'Coaching Category: One natural line aligned with the topic they raised.\n' +
+  'Situation / Behavior / Impact: Stay on that same thread—specific, readable, not generic filler.\n' +
+  'Next Steps: Practical bullets that fit the issue.\n' +
+  'Manager Follow-Up: Short accountability line tied to the same topic.\n\n' +
   'Layout example:\n' +
   SECTION_SHAPE
 
@@ -122,37 +115,19 @@ const COACHING_PROMPT =
  * Recognition-only system prompt. Zero overlap with COACHING_PROMPT — different role, rules, and vocabulary.
  */
 const RECOGNITION_PROMPT =
-  'You are writing a recognition form for an employee (OSL/Walmart retail). This is NOT coaching. This prompt is used ONLY when mode is recognition.\n\n' +
+  'You are writing a RECOGNITION form only (mode recognition). This is NOT coaching.\n\n' +
+  'GROUNDING:\n' +
+  '- Praise only what appears in coachingReason and notes. Do not invent customers, numbers, rankings, or scenarios.\n' +
+  '- Do not mention sales, goals, metrics, engagement, closing, or offers unless the user explicitly wrote those topics—then you may reflect their words only.\n' +
+  '- If input is short, keep recognition sincere and compact—no generic "store performance" claims unless the user implied them.\n\n' +
   'Rules:\n' +
-  '- Focus ONLY on what the employee is doing well.\n' +
-  '- Highlight strengths such as: urgency, engagement, consistency, customer interaction.\n' +
-  '- Reinforce positive habits.\n' +
-  '- Explain positive impact on store performance (and team/customer flow when it fits).\n' +
-  '- Encourage continued behavior—natural, professional, genuine.\n\n' +
-  'DO NOT:\n' +
-  '- Mention performance gaps.\n' +
-  '- Mention "below goal" or any deficit-vs-target framing.\n' +
-  '- Suggest improvement is needed, fixing problems, or corrective action.\n' +
-  '- Use negative or corrective language.\n' +
-  '- Use Next Steps words like: fix, improve (as in "must improve"), address gaps, close the gap, tighten up execution as a criticism.\n\n' +
-  'Even if performance is not perfect:\n' +
-  '- Frame it positively only.\n' +
-  '- Use phrases like: solid performance, strong effort, showing consistency, good engagement, building momentum, strong floor habits.\n\n' +
-  'Next Steps (recognition only):\n' +
-  '- Use ONLY themes: continue, maintain, build consistency, lead by example.\n' +
-  '- Example bullets: "Continue strong customer engagement" / "Maintain urgency throughout shifts" / "Keep leading by example on the floor."\n\n' +
-  'Manager Follow-Up (recognition only):\n' +
-  '- Supportive tone only, for example: "Will continue to support and monitor consistency. Expect performance to remain strong."\n' +
-  '- No accountability for failure or expectation of "improvement" from a deficit.\n\n' +
-  'Important:\n' +
-  '- Recognition must NEVER sound like coaching.\n' +
-  '- It should feel like: positive reinforcement, recognition of effort and performance, encouragement to continue.\n\n' +
-  'INPUT (JSON): employeeName, coachingReason (what is going well), notes (optional), mode recognition.\n\n' +
-  'LENGTH: 1–2 short sentences per prose section; Behavior max 2 sentences (strengths only); Next Steps 2–3 bullets.\n\n' +
-  'KPI/numbers: state once if useful—usually Pre-Coaching Notes—in a neutral or positive frame; do not repeat the same number string in every section.\n\n' +
-  'SENTENCES: Capitalize employee name in title case (employeeName from JSON). Bullet lines start with a capital letter.\n\n' +
-  'OUTPUT QUALITY: Complete sentences only—no fragments or cut-off endings.\n\n' +
-  'OUTPUT STRUCTURE — use these exact section titles in this order. Each body must be 100% positive reinforcement:\n' +
+  '- 100% positive reinforcement tied to the stated behavior.\n' +
+  '- No gaps, no "below goal," no corrective mandates.\n\n' +
+  'Next Steps: continue / maintain / build on strengths / lead by example—word bullets to match what the user actually praised.\n\n' +
+  'Manager Follow-Up: supportive only (e.g. continue to encourage and check in). No accountability for failure.\n\n' +
+  'LENGTH: 1–2 short sentences per section; Next Steps 2–3 bullets.\n' +
+  'SENTENCES: Title-case employeeName from JSON; bullets start with a capital letter.\n\n' +
+  'OUTPUT STRUCTURE — exact section titles in this order:\n' +
   'Pre-Coaching Notes:\n' +
   'Coaching Category:\n' +
   'Situation:\n' +
@@ -160,28 +135,26 @@ const RECOGNITION_PROMPT =
   'Impact:\n' +
   'Next Steps:\n' +
   'Manager Follow-Up:\n\n' +
-  'Section hints: Pre-Coaching = name + what is going well. Category = recognition / strong execution. Situation = positive snapshot. Behavior = what they do well. Impact = why it helps the store/team. Next Steps and Manager Follow-Up per rules above.\n\n' +
-  'TRUTH: Do not invent stats. If input is thin, stay positive and specific to floor strengths—never invent problems.\n\n' +
   'Layout example:\n' +
   SECTION_SHAPE
 
 const COACHING_USER_PREFIX =
-  'TASK: Coaching form only (corrective). Gaps, accountability, concrete actions to fix execution. Do not write recognition language.\n' +
-  'KPI/numbers: full detail once (usually Pre-Coaching Notes), then plain words—no repeat dumps.\n' +
-  'Prose 1–2 tight sentences; Behavior = misses/inconsistency; Next Steps = corrective actions; Manager Follow-Up = accountability.\n\n'
+  'TASK: Write the full coaching form. Sound natural and polished, but stay on the issue in coachingReason/notes.\n' +
+  'Use ISSUE_TOPIC_HINT and the TOPIC GUIDE in the system message for category/tone only—do not drift into unrelated themes.\n' +
+  'If numbers exist in the JSON, mention them once in Pre-Coaching Notes; never invent KPIs.\n\n'
 
 const RECOGNITION_USER_PREFIX =
   'TASK: Recognition form only. 100% positive reinforcement. You are NOT writing coaching.\n' +
-  'Every section must celebrate what is working. No gaps, no below-goal language, no improvement mandates.\n' +
-  'Next Steps: only continue, maintain, build consistency, lead by example.\n' +
-  'Manager Follow-Up: supportive only—e.g. "Will continue to support and monitor consistency. Expect performance to remain strong."\n' +
+  'Celebrate only what appears in coachingReason and notes—no invented customers, metrics, or sales stories.\n' +
+  'Next Steps: continue / maintain / build on strengths—word bullets to match the user’s praise.\n' +
+  'Manager Follow-Up: supportive check-in only; no deficit framing.\n' +
   'Use employeeName from JSON for the rep’s name.\n\n'
 
 /**
- * @param {{ system: string; user: string }} params
+ * @param {Array<{ role: string; content: string }>} chatMessages
  * @returns {Promise<string>}
  */
-async function callOpenAI({ system, user }) {
+async function callOpenAIChat(chatMessages) {
   if (!openai) {
     const err = new Error('OpenAI is not configured (missing OPENAI_API_KEY).')
     err.code = 'NO_KEY'
@@ -191,11 +164,8 @@ async function callOpenAI({ system, user }) {
   try {
     const completion = await openai.chat.completions.create({
       model: MODEL,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-      temperature: 0.45,
+      messages: chatMessages,
+      temperature: 0.52,
       max_tokens: 1300,
     })
 
@@ -219,19 +189,38 @@ async function callOpenAI({ system, user }) {
 }
 
 /**
+ * One immediate retry on transient OpenAI failures before caller falls back to deterministic output.
+ * @param {Array<{ role: string; content: string }>} chatMessages
+ */
+async function callOpenAIChatWithOneRetry(chatMessages) {
+  try {
+    return await callOpenAIChat(chatMessages)
+  } catch (e) {
+    if (e && typeof e === 'object' && e.code === 'NO_KEY') throw e
+    console.warn('[api/ai] OpenAI call failed, retrying once:', e?.message)
+    return await callOpenAIChat(chatMessages)
+  }
+}
+
+/**
  * Coaching and recognition use two entirely separate system prompts and user preambles — no shared template.
  * @param {string} action
  * @param {object} payload
+ * @returns {null | { system: string; user: string; coachingMeta: null | { issuePrimary: string; userBlob: string } }}
  */
 function buildCoachingLogMessages(action, payload) {
   if (action !== 'coaching_log') return null
   const mode = payload?.mode === 'recognition' ? 'recognition' : 'coaching'
 
+  const blob = normalizeIssueText(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`)
+  const { primary: issuePrimary } = classifyIssue(blob, mode)
+  const topicGuide = buildCoachingClassRules(issuePrimary, mode)
+
   let systemPrompt
   if (mode === 'recognition') {
-    systemPrompt = RECOGNITION_PROMPT
+    systemPrompt = `${RECOGNITION_PROMPT}\n\nTOPIC GUIDE:\n${topicGuide}`
   } else {
-    systemPrompt = COACHING_PROMPT
+    systemPrompt = `${COACHING_PROMPT}\n\nTOPIC GUIDE (tone and boundaries—not a template to paste):\n${topicGuide}`
   }
 
   let userPreamble
@@ -242,12 +231,19 @@ function buildCoachingLogMessages(action, payload) {
   }
 
   const body = JSON.stringify(payload ?? {}, null, 2)
+  const user =
+    userPreamble +
+    (mode === 'coaching'
+      ? `ISSUE_TOPIC_HINT (for category/tone only; content must come from JSON): ${issuePrimary}\n`
+      : '') +
+    'Copy-paste clean plain text. No fragments or cut-off endings.\n\n' +
+    `JSON:\n${body}`
+
   return {
     system: systemPrompt,
-    user:
-      userPreamble +
-      'Copy-paste clean plain text. No fragments or cut-off endings.\n\n' +
-      `JSON:\n${body}`,
+    user,
+    coachingMeta:
+      mode === 'coaching' ? { issuePrimary, userBlob: blob } : null,
   }
 }
 
@@ -399,6 +395,11 @@ app.post('/create-checkout-session', async (req, res) => {
       success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}`,
       metadata: checkoutMetadata,
+      discounts: [
+        {
+          coupon: '2RPLJgI1',
+        },
+      ],
     })
     if (!session.url) {
       return res.status(500).json({ error: 'Checkout session missing URL.' })
@@ -415,6 +416,7 @@ app.post('/api/ai', async (req, res) => {
   const action = req.body?.action
   let payload = req.body?.payload
   if (!action || typeof action !== 'string' || !payload || typeof payload !== 'object') {
+    console.error('[api/ai] bad request: expected { action, payload }')
     return res.status(400).json({ ok: false, error: 'Expected { action, payload }.' })
   }
 
@@ -434,10 +436,22 @@ app.post('/api/ai', async (req, res) => {
   // OpenAI: mode "recognition" → RECOGNITION_PROMPT; otherwise → COACHING_PROMPT (fully separate templates).
   const messages = buildCoachingLogMessages(action, payloadForAi)
   if (!messages) {
+    console.error('[api/ai] unknown action:', action)
     return res.status(400).json({ ok: false, error: `Unknown action: ${action}` })
   }
 
   if (!openai) {
+    if (action === 'coaching_log') {
+      const raw = buildDeterministicCoachingForm(payloadForAi)
+      const text = polishGeneratedCoachingForm(raw, rawName)
+      console.log('[api/ai] coaching_log response', {
+        source: 'deterministic',
+        usedOpenAI: false,
+        reason: 'no_openai_key',
+        mode: payloadForAi?.mode,
+      })
+      return res.json({ ok: true, text, source: 'deterministic', usedOpenAI: false })
+    }
     return res.json({
       ok: false,
       error: 'OpenAI is not configured (missing OPENAI_API_KEY).',
@@ -447,15 +461,71 @@ app.post('/api/ai', async (req, res) => {
   }
 
   try {
-    const raw = await callOpenAI(messages)
+    const chatMessages = [
+      { role: 'system', content: messages.system },
+      { role: 'user', content: messages.user },
+    ]
+    let raw = await callOpenAIChatWithOneRetry(chatMessages)
+
+    if (action === 'coaching_log' && messages.coachingMeta) {
+      const { issuePrimary, userBlob } = messages.coachingMeta
+      let text = polishGeneratedCoachingForm(raw, rawName)
+      if (coachingOutputViolatesTopicAnchor(text, issuePrimary, userBlob)) {
+        const retryUser = buildTopicRetryUserMessage(issuePrimary, userBlob)
+        raw = await callOpenAIChat([
+          ...chatMessages,
+          { role: 'assistant', content: raw },
+          { role: 'user', content: retryUser },
+        ])
+        text = polishGeneratedCoachingForm(raw, rawName)
+      }
+      console.log('[api/ai] coaching_log response', {
+        source: 'openai',
+        usedOpenAI: true,
+        mode: payloadForAi?.mode,
+        issuePrimary,
+      })
+      return res.json({ ok: true, text, source: 'openai', usedOpenAI: true })
+    }
+
     const text =
       action === 'coaching_log' ? polishGeneratedCoachingForm(raw, rawName) : raw
-    return res.json({ ok: true, text, source: 'openai' })
+    if (action === 'coaching_log') {
+      console.log('[api/ai] coaching_log response', {
+        source: 'openai',
+        usedOpenAI: true,
+        mode: payloadForAi?.mode,
+      })
+    }
+    return res.json({
+      ok: true,
+      text,
+      source: 'openai',
+      usedOpenAI: true,
+    })
   } catch (err) {
     const code = err.code || 'UNKNOWN'
     const message = err.message || 'AI request failed'
     if (code !== 'NO_KEY') {
       console.error('[api/ai]', code, message)
+    }
+    if (action === 'coaching_log') {
+      const raw = buildDeterministicCoachingForm(payloadForAi)
+      const text = polishGeneratedCoachingForm(raw, rawName)
+      console.log('[api/ai] coaching_log response', {
+        source: 'deterministic',
+        usedOpenAI: false,
+        reason: 'openai_error',
+        mode: payloadForAi?.mode,
+        error: message,
+      })
+      return res.json({
+        ok: true,
+        text,
+        source: 'deterministic',
+        usedOpenAI: false,
+        error: message,
+      })
     }
     return res.json({
       ok: false,
