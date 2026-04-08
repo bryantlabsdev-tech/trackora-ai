@@ -395,11 +395,6 @@ app.post('/create-checkout-session', async (req, res) => {
       success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}`,
       metadata: checkoutMetadata,
-      discounts: [
-        {
-          coupon: '2RPLJgI1',
-        },
-      ],
     })
     if (!session.url) {
       return res.status(500).json({ error: 'Checkout session missing URL.' })
