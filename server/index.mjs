@@ -73,6 +73,10 @@ const SECTION_SHAPE = [
 /** Corrective coaching — natural prose, anchored to user input; topic guide appended per request. */
 const COACHING_PROMPT =
   'You are an experienced team lead writing a CORRECTIVE COACHING form (mode coaching only).\n\n' +
+  'VOICE:\n' +
+  '- Write like a real manager speaking to the employee: professional, direct, slightly conversational.\n' +
+  '- Prefer first-person framing where it fits (e.g., "I want to discuss...", "I expect...", "We need to see...").\n' +
+  '- Avoid robotic language and generic evaluation phrases.\n\n' +
   'STAY ON TOPIC:\n' +
   '- Anchor everything to coachingReason and notes from the JSON. You may rephrase and polish so it reads professional and natural—like a real manager, not a stiff template.\n' +
   '- You may add closely related workplace context (expectations, standards, accountability, why it matters) as long as it clearly belongs to the SAME topic the user entered.\n' +
@@ -91,7 +95,16 @@ const COACHING_PROMPT =
   '- Prose: 1–2 short sentences per section; Behavior at most 2 sentences.\n' +
   '- Next Steps: 2–3 bullets.\n\n' +
   'NUMBERS / KPIs:\n' +
-  '- If the user gave numbers, state them once (usually Pre-Coaching Notes). Never invent metrics.\n\n' +
+  '- If the user gave numbers, use them directly and specifically (example shape: "You recorded X while goal was Y").\n' +
+  '- If numbers are present, keep them grounded to the actual input and do not invent additional metrics.\n\n' +
+  'ACCOUNTABILITY (required):\n' +
+  '- Clearly state what happened, what was expected, and what needs to change.\n' +
+  '- Include a direct expectation statement in Next Steps and/or Manager Follow-Up (example shape: "Going forward, I expect...").\n\n' +
+  'AVOID these vague phrases:\n' +
+  '- "indicates a need for improvement"\n' +
+  '- "below expectations"\n' +
+  '- "focus on improvement"\n' +
+  'Use explicit language instead: what happened, expected standard, required change.\n\n' +
   'AVOID stiff corporate phrasing ("leverage," "moving forward," "align on expectations," long essay tone). Sound direct and human.\n\n' +
   'SENTENCES: Title-case employeeName from JSON; bullet lines start with a capital letter. Complete sentences only.\n\n' +
   'SECTIONS — exact titles, this order. Nothing before "Pre-Coaching Notes:":\n' +
@@ -103,11 +116,13 @@ const COACHING_PROMPT =
   'Next Steps:\n' +
   'Manager Follow-Up:\n\n' +
   'SECTION GUIDANCE:\n' +
-  'Pre-Coaching Notes: Open with the employee’s name; frame the issue clearly from their input.\n' +
+  'Pre-Coaching Notes: Open with the employee’s name; frame the issue clearly from their input. If numbers/goal context exists, put the specific actual vs expected here.\n' +
   'Coaching Category: One natural line aligned with the topic they raised.\n' +
-  'Situation / Behavior / Impact: Stay on that same thread—specific, readable, not generic filler.\n' +
-  'Next Steps: Practical bullets that fit the issue.\n' +
-  'Manager Follow-Up: Short accountability line tied to the same topic.\n\n' +
+  'Situation: State what happened in plain manager language, tied to the input.\n' +
+  'Behavior: State the observed behavior and the expected behavior/standard.\n' +
+  'Impact: Explain concrete impact tied to the same issue (no unrelated domains).\n' +
+  'Next Steps: Practical, actionable bullets tied directly to the issue and expectation.\n' +
+  'Manager Follow-Up: Include timing and a direct expectation statement ("I expect...").\n\n' +
   'Layout example:\n' +
   SECTION_SHAPE
 
@@ -141,7 +156,8 @@ const RECOGNITION_PROMPT =
 const COACHING_USER_PREFIX =
   'TASK: Write the full coaching form. Sound natural and polished, but stay on the issue in coachingReason/notes.\n' +
   'Use ISSUE_TOPIC_HINT and the TOPIC GUIDE in the system message for category/tone only—do not drift into unrelated themes.\n' +
-  'If numbers exist in the JSON, mention them once in Pre-Coaching Notes; never invent KPIs.\n\n'
+  'If numbers exist in the JSON, mention actual vs expected clearly; never invent KPIs.\n' +
+  'Include clear accountability language: what happened, what was expected, and what needs to change.\n\n'
 
 const RECOGNITION_USER_PREFIX =
   'TASK: Recognition form only. 100% positive reinforcement. You are NOT writing coaching.\n' +
@@ -249,6 +265,53 @@ function buildCoachingLogMessages(action, payload) {
 
 const app = express()
 
+/**
+ * Vite output is `dist/` (`npm run build`). On Render, cwd is usually the service root, but we also
+ * resolve relative to this file so `node server/index.mjs` works from any cwd. Optional override:
+ * `FRONTEND_DIST=/absolute/or/relative/path` (e.g. if Root Directory in Render is a subfolder).
+ * @returns {{ distDir: string, indexHtmlPath: string, found: boolean }}
+ */
+function resolveFrontendDist() {
+  const envDir = process.env.FRONTEND_DIST?.trim()
+  const candidates = []
+  if (envDir) candidates.push(path.resolve(envDir))
+  candidates.push(path.resolve(__dirname, '..', 'dist'))
+  candidates.push(path.resolve(process.cwd(), 'dist'))
+
+  const seen = new Set()
+  for (const dir of candidates) {
+    if (seen.has(dir)) continue
+    seen.add(dir)
+    const indexHtmlPath = path.join(dir, 'index.html')
+    if (fs.existsSync(indexHtmlPath)) {
+      return { distDir: dir, indexHtmlPath, found: true }
+    }
+  }
+
+  const fallback = path.resolve(__dirname, '..', 'dist')
+  return {
+    distDir: fallback,
+    indexHtmlPath: path.join(fallback, 'index.html'),
+    found: false,
+  }
+}
+
+const { distDir, indexHtmlPath, found: hasFrontendBuild } = resolveFrontendDist()
+
+console.log('[static] server __dirname:', __dirname)
+console.log('[static] process.cwd():', process.cwd())
+console.log('[static] FRONTEND_DIST:', process.env.FRONTEND_DIST?.trim() || '(unset)')
+console.log('[static] distDir:', distDir)
+console.log('[static] index.html exists:', hasFrontendBuild, '→', indexHtmlPath)
+if (hasFrontendBuild) {
+  try {
+    const entries = fs.readdirSync(distDir)
+    console.log('[static] dist entries:', entries.slice(0, 12).join(', '), entries.length > 12 ? '…' : '')
+  } catch (e) {
+    console.warn('[static] could not read dist:', e?.message)
+  }
+}
+
 app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim() || ''
   if (!stripe || !webhookSecret) {
@@ -335,26 +398,6 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
 app.use(cors({ origin: true }))
 app.use(express.json({ limit: '256kb' }))
 
-app.get('/', (_req, res) => {
-  res.send(`<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TrackoraAI</title>
-  </head>
-  <body style="font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.5;">
-    <h1>TrackoraAI</h1>
-    <p><strong>AI-powered coaching form generator for sales teams</strong></p>
-    <p>
-      TrackoraAI helps team leads quickly generate structured coaching and recognition forms using AI.
-      Users can enter employee context, generate polished output, and copy section-by-section content
-      for real-world store leadership workflows.
-    </p>
-  </body>
-</html>`)
-})
-
 app.post('/create-checkout-session', async (req, res) => {
   const stripeKeyEnv = process.env.STRIPE_SECRET_KEY?.trim() || ''
   console.log('[create-checkout-session] STRIPE_SECRET_KEY present:', Boolean(stripeKeyEnv))
@@ -403,6 +446,60 @@ app.post('/create-checkout-session', async (req, res) => {
   } catch (e) {
     const message = typeof e?.message === 'string' ? e.message : 'Checkout session failed'
     console.error('[create-checkout-session]', message)
+    return res.status(500).json({ error: message })
+  }
+})
+
+app.post('/create-billing-portal-session', async (req, res) => {
+  if (!stripe) {
+    return res.status(503).json({ error: 'Stripe is not configured (missing STRIPE_SECRET_KEY).' })
+  }
+  const appUrl = process.env.APP_URL?.trim()?.replace(/\/$/, '') || ''
+  if (!appUrl) {
+    return res.status(503).json({ error: 'APP_URL is not configured.' })
+  }
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Database is not configured.' })
+  }
+
+  const userId = typeof req.body?.userId === 'string' ? req.body.userId.trim() : ''
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required in JSON body.' })
+  }
+
+  const { data: row, error } = await supabaseAdmin
+    .from('profiles')
+    .select('stripe_customer_id')
+    .eq('id', userId)
+    .maybeSingle()
+
+  if (error) {
+    console.error('[create-billing-portal-session] Supabase:', error.message)
+    return res.status(500).json({ error: 'Could not load account.' })
+  }
+
+  const customerId =
+    row && typeof row.stripe_customer_id === 'string' ? row.stripe_customer_id.trim() : ''
+  if (!customerId) {
+    return res.status(400).json({
+      error:
+        'No Stripe customer on file for this account. If you recently subscribed, wait a moment and try again, or contact support.',
+    })
+  }
+
+  try {
+    const session = await stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: `${appUrl}/`,
+    })
+    if (!session.url) {
+      return res.status(500).json({ error: 'Billing portal session missing URL.' })
+    }
+    console.log('[create-billing-portal-session] ok for userId', userId)
+    return res.json({ url: session.url })
+  } catch (e) {
+    const message = typeof e?.message === 'string' ? e.message : 'Billing portal failed'
+    console.error('[create-billing-portal-session]', message)
     return res.status(500).json({ error: message })
   }
 })
@@ -531,10 +628,44 @@ app.post('/api/ai', async (req, res) => {
   }
 })
 
+if (hasFrontendBuild) {
+  const absDist = path.resolve(distDir)
+  const absIndex = path.resolve(indexHtmlPath)
+  app.use(express.static(absDist, { fallthrough: true }))
+  app.get('*', (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next()
+    if (req.path.startsWith('/api') || req.path.startsWith('/webhook')) {
+      return res.status(404).type('text').send('Not found')
+    }
+    res.sendFile(absIndex, (err) => {
+      if (err) next(err)
+    })
+  })
+} else {
+  console.warn(
+    '[static] No built frontend found. Tried FRONTEND_DIST,',
+    path.resolve(__dirname, '..', 'dist'),
+    'and',
+    path.resolve(process.cwd(), 'dist'),
+    '— run `npm run build` or set FRONTEND_DIST to the folder containing index.html.',
+  )
+  app.get('/', (_req, res) => {
+    res
+      .status(503)
+      .type('text')
+      .send(
+        'Frontend is not built. Run `npm run build` and redeploy, or set FRONTEND_DIST to your Vite dist folder.',
+      )
+  })
+}
+
 const PORT = process.env.PORT || 3001
 const HOST = '0.0.0.0'
 
 app.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`)
+  if (hasFrontendBuild) {
+    console.log('[static] Serving SPA and static files from', path.resolve(distDir))
+  }
 })
  

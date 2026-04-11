@@ -1,6 +1,9 @@
+import { useLayoutEffect, useState } from 'react'
 import { useAuthSession } from './hooks/useAuthSession'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
+import { normalizeAppRoute, useBrowserPath } from './hooks/useBrowserPath'
 import CoachingApp from './CoachingApp'
+import AccountSettings from './components/AccountSettings'
 import AuthScreen from './components/AuthScreen'
 import { ProfileProvider } from './context/ProfileContext'
 import './App.css'
@@ -28,10 +31,26 @@ function SupabaseConfigMissing() {
 
 export default function App() {
   const { session, loading } = useAuthSession()
+  const [view, setView] = useState<'coaching' | 'settings'>('coaching')
+  const { pathname, replace } = useBrowserPath()
+  const route = normalizeAppRoute(pathname)
+
+  useLayoutEffect(() => {
+    if (loading) return
+    if (session) {
+      if (route === 'auth' || route === 'other') {
+        replace('/app')
+      }
+    } else if (route === 'app' || route === 'other') {
+      replace('/')
+    }
+  }, [loading, session, route, replace])
 
   if (!isSupabaseConfigured || !supabase) {
     return <SupabaseConfigMissing />
   }
+
+  const client = supabase
 
   if (loading) {
     return (
@@ -45,7 +64,7 @@ export default function App() {
   }
 
   if (!session) {
-    return <AuthScreen client={supabase} />
+    return <AuthScreen client={client} />
   }
 
   return (
@@ -54,12 +73,29 @@ export default function App() {
         <span className="user-bar-email" title={session.user.email ?? undefined}>
           {session.user.email}
         </span>
-        <button type="button" className="user-bar-signout" onClick={() => void supabase.auth.signOut()}>
+        <button
+          type="button"
+          className="user-bar-link"
+          onClick={() => setView((v) => (v === 'settings' ? 'coaching' : 'settings'))}
+        >
+          {view === 'settings' ? 'Back to Coach' : 'Account Settings'}
+        </button>
+        <button type="button" className="user-bar-signout" onClick={() => void client.auth.signOut()}>
           Sign out
         </button>
       </div>
-      <ProfileProvider client={supabase} userId={session.user.id} email={session.user.email ?? null}>
-        <CoachingApp />
+      <ProfileProvider client={client} userId={session.user.id} email={session.user.email ?? null}>
+        {view === 'settings' ? (
+          <AccountSettings
+            userId={session.user.id}
+            email={session.user.email ?? null}
+            onSignOut={async () => {
+              await client.auth.signOut()
+            }}
+          />
+        ) : (
+          <CoachingApp />
+        )}
       </ProfileProvider>
     </div>
   )

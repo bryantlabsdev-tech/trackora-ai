@@ -34,3 +34,7 @@ export function getCoachingApiUrl(): string {
 export function getCreateCheckoutSessionUrl(): string {
   return `${getApiBase()}/create-checkout-session`
 }
+
+export function getCreateBillingPortalSessionUrl(): string {
+  return `${getApiBase()}/create-billing-portal-session`
+}

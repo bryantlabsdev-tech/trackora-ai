@@ -1,28 +1,77 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import appIcon from '../assets/app-icon.png'
 import '../auth.css'
 
 type Mode = 'signin' | 'signup'
 
 type Props = {
   client: SupabaseClient
+  defaultMode?: Mode
+  onBack?: () => void
 }
 
-export default function AuthScreen({ client }: Props) {
-  const [mode, setMode] = useState<Mode>('signin')
+/** Map Supabase messages to short, on-brand copy without changing other errors. */
+function formatAuthErrorMessage(raw: string): string {
+  const t = raw.trim()
+  if (/invalid login credentials/i.test(t)) {
+    return 'Invalid email or password.'
+  }
+  return raw
+}
+
+export default function AuthScreen({ client, defaultMode = 'signin', onBack }: Props) {
+  const [mode, setMode] = useState<Mode>(defaultMode)
+
+  useEffect(() => {
+    setMode(defaultMode)
+  }, [defaultMode])
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [resetSending, setResetSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
+
+  async function handleForgotPassword() {
+    setError(null)
+    setInfo(null)
+    const em = email.trim()
+    if (!em) {
+      setError('Enter your email address first, then use Forgot password.')
+      return
+    }
+    setResetSending(true)
+    try {
+      const { error: err } = await client.auth.resetPasswordForEmail(em, {
+        redirectTo: `${window.location.origin}/`,
+      })
+      if (err) {
+        setError(formatAuthErrorMessage(err.message))
+        return
+      }
+      setInfo('If an account exists for that email, we sent a link to reset your password.')
+    } finally {
+      setResetSending(false)
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError(null)
     setInfo(null)
     const em = email.trim()
-    if (!em || !password) {
-      setError('Enter email and password.')
+    if (!em && !password) {
+      setError('Enter your email and password.')
+      return
+    }
+    if (!em) {
+      setError('Enter your email address.')
+      return
+    }
+    if (!password) {
+      setError('Enter your password.')
       return
     }
     setLoading(true)
@@ -30,14 +79,14 @@ export default function AuthScreen({ client }: Props) {
       if (mode === 'signup') {
         const { error: err } = await client.auth.signUp({ email: em, password })
         if (err) {
-          setError(err.message)
+          setError(formatAuthErrorMessage(err.message))
           return
         }
         setInfo('Check your email to confirm your account if required by your project settings.')
       } else {
         const { error: err } = await client.auth.signInWithPassword({ email: em, password })
         if (err) {
-          setError(err.message)
+          setError(formatAuthErrorMessage(err.message))
           return
         }
       }
@@ -46,10 +95,27 @@ export default function AuthScreen({ client }: Props) {
     }
   }
 
+  const busy = loading || resetSending
+
   return (
     <div className="auth-screen">
       <div className="auth-card card">
-        <p className="eyebrow">Trackora</p>
+        {onBack && (
+          <button type="button" className="auth-back-link" onClick={onBack}>
+            ← Back
+          </button>
+        )}
+        <div className="auth-brand">
+          <img
+            className="auth-app-icon"
+            src={appIcon}
+            alt=""
+            width={40}
+            height={40}
+            decoding="async"
+          />
+          <p className="eyebrow">Trackora</p>
+        </div>
         <h1 className="auth-title">{mode === 'signin' ? 'Sign in' : 'Create account'}</h1>
         <p className="auth-subtitle">Use your email and password to continue.</p>
 
@@ -63,6 +129,7 @@ export default function AuthScreen({ client }: Props) {
               setMode('signin')
               setError(null)
               setInfo(null)
+              setResetSending(false)
             }}
           >
             Sign in
@@ -76,40 +143,73 @@ export default function AuthScreen({ client }: Props) {
               setMode('signup')
               setError(null)
               setInfo(null)
+              setResetSending(false)
             }}
           >
             Sign up
           </button>
         </div>
 
-        <form className="auth-form" onSubmit={(e) => void handleSubmit(e)}>
-          <label className="field">
+        <form className="auth-form" onSubmit={(e) => void handleSubmit(e)} noValidate>
+          <label className="field" htmlFor="auth-email">
             <span className="label-text">Email</span>
             <input
+              id="auth-email"
               className="field-control"
               type="email"
+              name="email"
               autoComplete="email"
+              inputMode="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              disabled={loading}
+              disabled={busy}
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? 'auth-form-error' : undefined}
             />
           </label>
-          <label className="field">
+          <label className="field auth-field-password" htmlFor="auth-password">
             <span className="label-text">Password</span>
-            <input
-              className="field-control"
-              type="password"
-              autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              disabled={loading}
-            />
+            <div className="password-field">
+              <input
+                id="auth-password"
+                className="field-control password-field-input"
+                type={showPassword ? 'text' : 'password'}
+                name="password"
+                autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={busy}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? 'auth-form-error' : undefined}
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((prev) => !prev)}
+                disabled={busy}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            {mode === 'signin' && (
+              <div className="auth-forgot-row">
+                <button
+                  type="button"
+                  className="auth-forgot-link"
+                  onClick={() => void handleForgotPassword()}
+                  disabled={busy}
+                >
+                  {resetSending ? 'Sending...' : 'Forgot password?'}
+                </button>
+              </div>
+            )}
           </label>
 
           {error && (
-            <p className="auth-error" role="alert">
-              {error}
-            </p>
+            <div id="auth-form-error" className="auth-error-banner" role="alert">
+              <p className="auth-error-text">{error}</p>
+            </div>
           )}
           {info && (
             <p className="auth-info" role="status">
@@ -117,9 +217,20 @@ export default function AuthScreen({ client }: Props) {
             </p>
           )}
 
-          <button type="submit" className="btn-primary" disabled={loading}>
-            {loading && <span className="spinner" aria-hidden />}
-            {loading ? 'Please wait…' : mode === 'signin' ? 'Sign in' : 'Sign up'}
+          <button
+            type="submit"
+            className="btn-primary auth-submit-btn"
+            disabled={busy}
+            aria-busy={loading}
+          >
+            {loading ? (
+              <>
+                <span className="spinner auth-submit-spinner" aria-hidden />
+                <span>{mode === 'signin' ? 'Signing in...' : 'Creating account...'}</span>
+              </>
+            ) : (
+              <span>{mode === 'signin' ? 'Sign in' : 'Sign up'}</span>
+            )}
           </button>
         </form>
       </div>

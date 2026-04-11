@@ -35,7 +35,8 @@ export function formatNextStepsForClipboard(body: string): string {
 }
 
 /**
- * One section block for clipboard: "Label:\nbody" (Next Steps uses hyphen bullets).
+ * One section body for clipboard (label excluded).
+ * Next Steps keeps bullet-style content as plain text lines.
  */
 export function formatSectionClipboardBlock(sectionLabel: string, body: string): string {
   const trimmed = (body ?? '').trim()
@@ -43,10 +44,10 @@ export function formatSectionClipboardBlock(sectionLabel: string, body: string):
 
   if (sectionLabel === 'Next Steps') {
     const bullets = formatNextStepsForClipboard(trimmed)
-    return bullets ? `Next Steps:\n${bullets}` : ''
+    return bullets
   }
 
-  return `${sectionLabel}:\n${trimmed}`
+  return trimmed
 }
 
 export function sectionClipboardHasContent(sectionLabel: string, body: string): boolean {

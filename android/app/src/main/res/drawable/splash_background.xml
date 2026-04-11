@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Solid only: do not embed @mipmap/ic_launcher in <bitmap> — on API 26+ it is an
+     adaptive-icon XML and will crash when inflated as a bitmap drawable. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/splash_background" />
+</shape>
