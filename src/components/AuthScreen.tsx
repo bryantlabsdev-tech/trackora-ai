@@ -116,8 +116,12 @@ export default function AuthScreen({ client, defaultMode = 'signin', onBack }: P
           />
           <p className="eyebrow">Trackora</p>
         </div>
-        <h1 className="auth-title">{mode === 'signin' ? 'Sign in' : 'Create account'}</h1>
-        <p className="auth-subtitle">Use your email and password to continue.</p>
+        <h1 className="auth-title">
+          {mode === 'signin' ? 'Sign in' : 'Start writing coaching forms in 10 seconds'}
+        </h1>
+        <p className="auth-subtitle">
+          {mode === 'signin' ? 'Use your email and password to continue.' : 'Free trial. No credit card required.'}
+        </p>
 
         <div className="auth-mode-toggle" role="tablist" aria-label="Account">
           <button
@@ -166,6 +170,7 @@ export default function AuthScreen({ client, defaultMode = 'signin', onBack }: P
               aria-invalid={error ? true : undefined}
               aria-describedby={error ? 'auth-form-error' : undefined}
             />
+            {mode === 'signup' && <p className="auth-email-helper">No spam. Just your account.</p>}
           </label>
           <label className="field auth-field-password" htmlFor="auth-password">
             <span className="label-text">Password</span>
@@ -229,9 +234,16 @@ export default function AuthScreen({ client, defaultMode = 'signin', onBack }: P
                 <span>{mode === 'signin' ? 'Signing in...' : 'Creating account...'}</span>
               </>
             ) : (
-              <span>{mode === 'signin' ? 'Sign in' : 'Sign up'}</span>
+              <span>{mode === 'signin' ? 'Sign in' : 'Start Free Trial'}</span>
             )}
           </button>
+          {mode === 'signup' && (
+            <ul className="auth-trust-list" aria-label="Trial trust points">
+              <li>✓ Takes 10 seconds</li>
+              <li>✓ Built for real managers</li>
+              <li>✓ No more typing after shifts</li>
+            </ul>
+          )}
         </form>
       </div>
     </div>

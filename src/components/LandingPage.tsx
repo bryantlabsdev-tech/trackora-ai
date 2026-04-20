@@ -1,6 +1,9 @@
 import appIcon from '../assets/app-icon.png'
 import '../landing.css'
 
+/** Canonical hero line — this is what localhost:5173 must show for `/` (signed out). */
+export const LANDING_HERO_HEADLINE = 'Write coaching forms in 10 seconds with AI'
+
 export default function LandingPage() {
   return (
     <div className="landing-page">
@@ -24,27 +27,47 @@ export default function LandingPage() {
       <main>
         <section className="landing-hero">
           <p className="landing-eyebrow">AI coaching forms for leaders</p>
-          <h1 className="landing-hero-title">
-            Structured coaching &amp; recognition, <span className="landing-hero-accent">in seconds</span>
-          </h1>
+          <h1 className="landing-hero-title">{LANDING_HERO_HEADLINE}</h1>
           <p className="landing-hero-lead">
-            TrackoraAI is an AI-powered coaching form generator built for sales teams and store leaders. Save
-            time on documentation while keeping feedback clear, consistent, and ready to use.
+            Built for Team Leads and managers. No more typing after long shifts — just enter what happened and
+            get a clean, professional coaching form instantly.
           </p>
+
+          <div className="landing-hero-demo" aria-label="Demo: user types input and AI generates a coaching form">
+            <div className="landing-hero-demo-window">
+              <div className="landing-hero-demo-header">
+                <span className="landing-hero-demo-dot" />
+                <span className="landing-hero-demo-dot" />
+                <span className="landing-hero-demo-dot" />
+                <span className="landing-hero-demo-title">Live demo</span>
+              </div>
+              <div className="landing-hero-demo-body">
+                <div className="landing-hero-demo-input">
+                  <p className="landing-hero-demo-label">You type:</p>
+                  <p className="landing-hero-demo-text">
+                    Late to shift twice this week. Missed two customer follow-ups.
+                    <span className="landing-hero-demo-cursor" aria-hidden />
+                  </p>
+                </div>
+                <div className="landing-hero-demo-output">
+                  <p className="landing-hero-demo-label">AI form generated:</p>
+                  <div className="landing-hero-demo-lines" aria-hidden>
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="landing-hero-ctas">
             <a className="landing-btn landing-btn--primary landing-btn--lg" href="/signup">
               Start Free Trial
             </a>
-            <a className="landing-btn landing-btn--ghost landing-btn--lg" href="/login">
-              Log In
-            </a>
-            <a className="landing-btn landing-btn--outline landing-btn--lg" href="/app">
-              Open App
-            </a>
           </div>
-          <p className="landing-hero-note">
-            New here? Start a trial to create your account. Already use Trackora? Log in or open the app.
-          </p>
+          <p className="landing-hero-note">No credit card required</p>
         </section>
 
         <section className="landing-features" aria-labelledby="landing-features-heading">
@@ -53,21 +76,21 @@ export default function LandingPage() {
           </h2>
           <ul className="landing-feature-grid">
             <li className="landing-feature-card">
-              <h3 className="landing-feature-title">AI-powered drafts</h3>
+              <h3 className="landing-feature-title">Write coaching forms faster</h3>
               <p className="landing-feature-copy">
                 Generate structured coaching and recognition output grounded in what your reps actually did—not
                 generic filler.
               </p>
             </li>
             <li className="landing-feature-card">
-              <h3 className="landing-feature-title">Built for sales teams</h3>
+              <h3 className="landing-feature-title">No more typing after long shifts</h3>
               <p className="landing-feature-copy">
                 Language and flow tuned for retail and sales leadership: fast to write, easy to deliver, ready
                 to file.
               </p>
             </li>
             <li className="landing-feature-card">
-              <h3 className="landing-feature-title">Save hours every week</h3>
+              <h3 className="landing-feature-title">Professional wording instantly</h3>
               <p className="landing-feature-copy">
                 Spend less time wrestling with wording and more time on the floor. Copy section-by-section or
                 take the full form.
@@ -88,9 +111,6 @@ export default function LandingPage() {
             <div className="landing-trial-ctas">
               <a className="landing-btn landing-btn--primary landing-btn--lg" href="/signup">
                 Start Free Trial
-              </a>
-              <a className="landing-btn landing-btn--ghost landing-btn--lg" href="/app">
-                Open App
               </a>
             </div>
           </div>
