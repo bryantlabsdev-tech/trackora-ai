@@ -20,10 +20,14 @@ export function useBrowserPath() {
   return { pathname, replace }
 }
 
-export function normalizeAppRoute(pathname: string): 'auth' | 'app' | 'other' {
+export type AppRoute = 'landing' | 'login' | 'signup' | 'app' | 'other'
+
+export function normalizeAppRoute(pathname: string): AppRoute {
   let p = pathname.replace(/\/index\.html\/?$/, '')
   if (p === '') p = '/'
   if (p === '/app' || p.startsWith('/app/')) return 'app'
-  if (p === '/') return 'auth'
+  if (p === '/') return 'landing'
+  if (p === '/login') return 'login'
+  if (p === '/signup') return 'signup'
   return 'other'
 }

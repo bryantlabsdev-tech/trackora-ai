@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core'
 import { useLayoutEffect, useState } from 'react'
 import { useAuthSession } from './hooks/useAuthSession'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
@@ -5,6 +6,7 @@ import { normalizeAppRoute, useBrowserPath } from './hooks/useBrowserPath'
 import CoachingApp from './CoachingApp'
 import AccountSettings from './components/AccountSettings'
 import AuthScreen from './components/AuthScreen'
+import LandingPage from './components/LandingPage'
 import { ProfileProvider } from './context/ProfileContext'
 import './App.css'
 import './auth.css'
@@ -37,14 +39,25 @@ export default function App() {
 
   useLayoutEffect(() => {
     if (loading) return
+
+    // Capacitor / packaged app: skip marketing site; open the app shell directly.
+    if (Capacitor.isNativePlatform()) {
+      let p = pathname.replace(/\/index\.html\/?$/, '')
+      if (p === '') p = '/'
+      if (p === '/') {
+        replace('/app')
+        return
+      }
+    }
+
     if (session) {
-      if (route === 'auth' || route === 'other') {
+      if (route === 'landing' || route === 'login' || route === 'signup' || route === 'other') {
         replace('/app')
       }
     } else if (route === 'app' || route === 'other') {
-      replace('/')
+      replace(route === 'app' ? '/login' : '/')
     }
-  }, [loading, session, route, replace])
+  }, [loading, session, route, pathname, replace])
 
   if (!isSupabaseConfigured || !supabase) {
     return <SupabaseConfigMissing />
@@ -64,7 +77,23 @@ export default function App() {
   }
 
   if (!session) {
-    return <AuthScreen client={client} />
+    if (route === 'landing') {
+      return <LandingPage />
+    }
+    if (route === 'login') {
+      return <AuthScreen client={client} defaultMode="signin" onBack={() => replace('/')} />
+    }
+    if (route === 'signup') {
+      return <AuthScreen client={client} defaultMode="signup" onBack={() => replace('/')} />
+    }
+    return (
+      <div className="auth-screen">
+        <div className="auth-loading" role="status" aria-live="polite">
+          <span className="spinner" aria-hidden />
+          <span>Loading…</span>
+        </div>
+      </div>
+    )
   }
 
   return (

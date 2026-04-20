@@ -18,7 +18,7 @@ export default function CheckoutSuccess() {
             Reference: <code>{sessionId}</code>
           </p>
         )}
-        <a className="btn-primary btn-plan-upgrade" href="/">
+        <a className="btn-primary btn-plan-upgrade" href="/app">
           Back to app
         </a>
       </div>

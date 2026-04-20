@@ -490,7 +490,7 @@ app.post('/create-billing-portal-session', async (req, res) => {
   try {
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${appUrl}/`,
+      return_url: `${appUrl}/app`,
     })
     if (!session.url) {
       return res.status(500).json({ error: 'Billing portal session missing URL.' })
