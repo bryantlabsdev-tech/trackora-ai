@@ -697,6 +697,7 @@ async function handleCreateCustomerPortalSession(req, res) {
     return res.status(401).json({ error: auth.error || 'Unauthorized.' })
   }
   const userId = auth.userId
+  console.log('[create-customer-portal-session] authenticated user id:', userId)
 
   const { data: row, error } = await supabaseAdmin
     .from('profiles')
@@ -708,11 +709,27 @@ async function handleCreateCustomerPortalSession(req, res) {
     console.error('[create-customer-portal-session] Supabase:', error.message)
     return res.status(500).json({ error: 'Could not load account.' })
   }
+  if (!row) {
+    console.error('[create-customer-portal-session] profile row not found for user:', userId)
+    return res.status(404).json({ error: 'No profile found for this user.' })
+  }
+  console.log('[create-customer-portal-session] profile lookup result:', {
+    userId,
+    hasRow: Boolean(row),
+    isPro: row?.is_pro ?? null,
+    subscriptionStatus: row?.subscription_status ?? null,
+    currentPeriodEnd: row?.current_period_end ?? null,
+  })
 
   let customerId =
     row && typeof row.stripe_customer_id === 'string' ? row.stripe_customer_id.trim() : ''
   const subscriptionId =
     row && typeof row.stripe_subscription_id === 'string' ? row.stripe_subscription_id.trim() : ''
+  console.log('[create-customer-portal-session] profile billing ids:', {
+    userId,
+    stripe_customer_id: customerId || null,
+    stripe_subscription_id: subscriptionId || null,
+  })
 
   // Recover missing customer id from subscription if it exists.
   if (!customerId && subscriptionId) {
@@ -737,7 +754,18 @@ async function handleCreateCustomerPortalSession(req, res) {
     } catch (e) {
       console.error(
         '[create-customer-portal-session] failed recovering customer id from subscription:',
-        typeof e?.message === 'string' ? e.message : 'unknown error',
+        {
+          message: typeof e?.message === 'string' ? e.message : 'unknown error',
+          type: e?.type ?? null,
+          code: e?.code ?? null,
+          statusCode: e?.statusCode ?? null,
+          requestId: e?.requestId ?? null,
+          raw: e?.raw ?? null,
+          rawType: e?.rawType ?? null,
+          param: e?.param ?? null,
+          userId,
+          stripe_subscription_id: subscriptionId || null,
+        },
       )
     }
   }
@@ -748,12 +776,15 @@ async function handleCreateCustomerPortalSession(req, res) {
       hasSubscriptionId: Boolean(subscriptionId),
     })
     return res.status(400).json({
-      error:
-        'No Stripe subscription account was found for this user yet. If you just upgraded, wait a moment and refresh. If this persists, contact support.',
+      error: 'No Stripe customer found for this user',
     })
   }
 
   try {
+    console.log('[create-customer-portal-session] creating Stripe billing portal session:', {
+      userId,
+      stripe_customer_id: customerId,
+    })
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
       return_url: `${appUrl}/app`,
@@ -771,7 +802,18 @@ async function handleCreateCustomerPortalSession(req, res) {
     return res.json({ url: session.url })
   } catch (e) {
     const message = typeof e?.message === 'string' ? e.message : 'Billing portal failed'
-    console.error('[create-customer-portal-session]', message)
+    console.error('[create-customer-portal-session] Stripe billing portal creation failed:', {
+      message,
+      type: e?.type ?? null,
+      code: e?.code ?? null,
+      statusCode: e?.statusCode ?? null,
+      requestId: e?.requestId ?? null,
+      raw: e?.raw ?? null,
+      rawType: e?.rawType ?? null,
+      param: e?.param ?? null,
+      userId,
+      stripe_customer_id: customerId,
+    })
     return res.status(500).json({ error: message })
   }
 }
