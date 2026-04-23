@@ -7,6 +7,7 @@ import CoachingApp from './CoachingApp'
 import AccountSettings from './components/AccountSettings'
 import AuthScreen from './components/AuthScreen'
 import LandingPage from './components/LandingPage'
+import ResetPasswordScreen from './components/ResetPasswordScreen'
 import { ProfileProvider } from './context/ProfileContext'
 import './App.css'
 import './auth.css'
@@ -64,6 +65,16 @@ export default function App() {
   }
 
   const client = supabase
+
+  if (route === 'reset-password') {
+    return (
+      <ResetPasswordScreen
+        client={client}
+        onDone={() => replace(session ? '/app' : '/login')}
+        onBack={() => replace(session ? '/app' : '/login')}
+      />
+    )
+  }
 
   if (loading) {
     return (

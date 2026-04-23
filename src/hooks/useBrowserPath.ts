@@ -20,7 +20,7 @@ export function useBrowserPath() {
   return { pathname, replace }
 }
 
-export type AppRoute = 'landing' | 'login' | 'signup' | 'app' | 'other'
+export type AppRoute = 'landing' | 'login' | 'signup' | 'reset-password' | 'app' | 'other'
 
 export function normalizeAppRoute(pathname: string): AppRoute {
   let p = pathname.replace(/\/index\.html\/?$/, '')
@@ -29,5 +29,6 @@ export function normalizeAppRoute(pathname: string): AppRoute {
   if (p === '/') return 'landing'
   if (p === '/login') return 'login'
   if (p === '/signup') return 'signup'
+  if (p === '/reset-password') return 'reset-password'
   return 'other'
 }

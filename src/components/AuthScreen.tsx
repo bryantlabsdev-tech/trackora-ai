@@ -45,7 +45,7 @@ export default function AuthScreen({ client, defaultMode = 'signin', onBack }: P
     setResetSending(true)
     try {
       const { error: err } = await client.auth.resetPasswordForEmail(em, {
-        redirectTo: `${window.location.origin}/login`,
+        redirectTo: `${window.location.origin}/reset-password`,
       })
       if (err) {
         setError(formatAuthErrorMessage(err.message))

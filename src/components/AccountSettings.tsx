@@ -16,6 +16,9 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
   const [portalLoading, setPortalLoading] = useState(false)
   const [portalError, setPortalError] = useState<string | null>(null)
+  const [passwordLoading, setPasswordLoading] = useState(false)
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [passwordInfo, setPasswordInfo] = useState<string | null>(null)
 
   const planLabel = profile?.is_pro ? 'Pro' : 'Free'
   const usageLabel = useMemo(() => {
@@ -112,6 +115,33 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
     }
   }
 
+  async function handleChangePassword() {
+    if (!supabase) {
+      setPasswordError('Auth is not configured. Please refresh and try again.')
+      return
+    }
+    const targetEmail = (email ?? '').trim()
+    if (!targetEmail) {
+      setPasswordError('No email found for your account. Please sign in again.')
+      return
+    }
+
+    setPasswordError(null)
+    setPasswordInfo(null)
+    setPasswordLoading(true)
+    try {
+      const redirectTo = `${window.location.origin}/reset-password`
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(targetEmail, { redirectTo })
+      if (resetError) {
+        setPasswordError(resetError.message)
+        return
+      }
+      setPasswordInfo('Password reset email sent. Check your inbox.')
+    } finally {
+      setPasswordLoading(false)
+    }
+  }
+
   return (
     <main className="settings-page">
       <header className="settings-header">
@@ -151,14 +181,17 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
 
         <article className="card settings-card">
           <h2 className="card-title">Security</h2>
-          <p className="settings-note">Password updates are available in a future release.</p>
+          <p className="settings-note">Send yourself a secure password reset link using Supabase.</p>
           <button
             type="button"
             className="btn-secondary settings-btn"
-            onClick={() => window.alert('Change Password is coming soon.')}
+            onClick={() => void handleChangePassword()}
+            disabled={passwordLoading}
           >
-            Change Password
+            {passwordLoading ? 'Sending reset email…' : 'Change Password'}
           </button>
+          {passwordError && <p className="settings-error">{passwordError}</p>}
+          {passwordInfo && <p className="settings-note">{passwordInfo}</p>}
         </article>
 
         <article className="card settings-card">
