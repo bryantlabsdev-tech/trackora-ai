@@ -14,6 +14,7 @@ import {
   sectionClipboardHasContent,
 } from './lib/formatCoachingFormClipboard'
 import { parseCoachingLogMarkdown } from './lib/parseCoachingLog'
+import { getCreateCheckoutSessionUrl } from './lib/apiBase'
 import './App.css'
 
 type UpgradeToProButtonProps = {
@@ -43,7 +44,7 @@ function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
       }
 
       console.log('Calling backend checkout...')
-      const res = await fetch('https://trackora-ai.onrender.com/create-checkout-session', {
+      const res = await fetch(getCreateCheckoutSessionUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

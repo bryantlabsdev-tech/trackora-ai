@@ -6,6 +6,9 @@ export type ProfileRow = {
   usage_count: number
   stripe_customer_id: string | null
   stripe_subscription_id: string | null
+  subscription_status: string | null
+  current_period_end: string | null
+  plan: string | null
   created_at: string
 }
 

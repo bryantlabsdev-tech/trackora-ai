@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useProfile } from '../context/ProfileContext'
 import { getCreateBillingPortalSessionUrl, getCreateCheckoutSessionUrl } from '../lib/apiBase'
+import { supabase } from '../lib/supabase'
 import { freeGenerationsRemainingLabel } from '../types/profile'
 
 type AccountSettingsProps = {
@@ -22,6 +23,21 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
     if (profile.is_pro) return 'Pro Plan Active'
     return `${freeGenerationsRemainingLabel(profile)} (${profile.usage_count} used)`
   }, [profile])
+  const canManageSubscription = Boolean(
+    profile?.is_pro ||
+      profile?.stripe_customer_id?.trim() ||
+      profile?.stripe_subscription_id?.trim() ||
+      profile?.subscription_status?.trim(),
+  )
+  const subscriptionStatusLabel = profile?.subscription_status?.trim() || (profile?.is_pro ? 'active' : 'none')
+  const currentPeriodEndLabel = useMemo(() => {
+    if (!profile?.current_period_end) return null
+    const d = new Date(profile.current_period_end)
+    if (Number.isNaN(d.getTime())) return null
+    return d.toLocaleDateString()
+  }, [profile?.current_period_end])
+  const cancelAtPeriodEndLikely =
+    profile?.subscription_status === 'canceled' && Boolean(profile?.current_period_end)
 
   async function handleUpgrade() {
     const trimmedUserId = userId.trim()
@@ -57,15 +73,14 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
   }
 
   async function handleManageSubscription() {
-    const trimmedUserId = userId.trim()
-    if (!trimmedUserId) {
-      setPortalError('Could not open billing portal: missing user id. Please sign in again.')
+    if (!supabase) {
+      setPortalError('Auth is not configured. Please refresh and try again.')
       return
     }
-    if (!profile?.stripe_customer_id?.trim()) {
-      setPortalError(
-        'No Stripe customer on file yet. If you just upgraded, wait a minute and refresh. Otherwise contact support.',
-      )
+    const { data, error: sessionError } = await supabase.auth.getSession()
+    const accessToken = data.session?.access_token
+    if (sessionError || !accessToken) {
+      setPortalError('Your session expired. Please sign in again and retry.')
       return
     }
 
@@ -74,8 +89,11 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
     try {
       const res = await fetch(getCreateBillingPortalSessionUrl(), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: trimmedUserId }),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({}),
       })
       const data = (await res.json()) as { url?: string; error?: string }
       if (!res.ok) {
@@ -145,15 +163,28 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
 
         <article className="card settings-card">
           <h2 className="card-title">Subscription</h2>
-          {profile?.is_pro ? (
+          <div className="settings-row">
+            <span className="settings-label">Plan</span>
+            <span className={'settings-pill ' + (profile?.is_pro ? 'is-pro' : 'is-free')}>{planLabel}</span>
+          </div>
+          <div className="settings-row">
+            <span className="settings-label">Status</span>
+            <span className="settings-value">{subscriptionStatusLabel}</span>
+          </div>
+          {currentPeriodEndLabel && (
+            <div className="settings-row settings-row-stacked">
+              <span className="settings-label">{cancelAtPeriodEndLikely ? 'Access until' : 'Renews on'}</span>
+              <span className="settings-value">{currentPeriodEndLabel}</span>
+            </div>
+          )}
+          {canManageSubscription ? (
             <>
-              <p className="settings-note">Update payment method, view invoices, or cancel in the Stripe customer portal.</p>
+              <p className="settings-note">Update payment method, cancel, or manage billing in Stripe.</p>
               <button
                 type="button"
                 className="btn-secondary settings-btn"
                 onClick={() => void handleManageSubscription()}
-                disabled={portalLoading || !profile?.stripe_customer_id?.trim()}
-                title={!profile?.stripe_customer_id?.trim() ? 'Stripe customer ID not synced yet' : undefined}
+                disabled={portalLoading}
               >
                 {portalLoading ? 'Opening portal…' : 'Manage Subscription'}
               </button>

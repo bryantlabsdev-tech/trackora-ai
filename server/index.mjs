@@ -37,6 +37,10 @@ const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY?.trim() || ''
 const stripe = stripeSecretKey ? new Stripe(stripeSecretKey) : null
+const stripePriceId =
+  process.env.STRIPE_PRICE_ID?.trim() ||
+  process.env.STRIPE_PRO_PRICE_ID?.trim() ||
+  'price_1TJaIIHG6iuq9JCNXyc4I5Hb'
 
 const supabaseUrl = process.env.SUPABASE_URL?.trim() || ''
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || ''
@@ -46,6 +50,192 @@ const supabaseAdmin =
         auth: { persistSession: false, autoRefreshToken: false },
       })
     : null
+
+const PRO_PLAN_STATUSES = new Set(['active', 'trialing'])
+const FORCE_DISABLE_STATUSES = new Set(['unpaid', 'incomplete_expired'])
+const GRACE_STATUSES = new Set(['past_due', 'incomplete'])
+
+/**
+ * @param {number | null} unixSeconds
+ * @returns {string | null}
+ */
+function toIsoFromUnixSeconds(unixSeconds) {
+  if (!Number.isFinite(unixSeconds) || unixSeconds <= 0) return null
+  return new Date(unixSeconds * 1000).toISOString()
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function pickStripeId(value) {
+  if (!value) return null
+  if (typeof value === 'string') return value
+  if (typeof value === 'object' && value && 'id' in value && typeof value.id === 'string') {
+    return value.id
+  }
+  return null
+}
+
+/**
+ * @param {Stripe.Subscription} subscription
+ * @returns {{
+ *   isPro: boolean
+ *   reason: string
+ *   subscriptionStatus: string | null
+ *   currentPeriodEndIso: string | null
+ * }}
+ */
+function evaluateSubscriptionAccess(subscription) {
+  const status = typeof subscription.status === 'string' ? subscription.status : null
+  const currentPeriodEndUnix =
+    typeof subscription.current_period_end === 'number' ? subscription.current_period_end : null
+  const currentPeriodEndIso = toIsoFromUnixSeconds(currentPeriodEndUnix)
+  const nowUnix = Math.floor(Date.now() / 1000)
+  const periodActive = Number.isFinite(currentPeriodEndUnix) && currentPeriodEndUnix > nowUnix
+  const cancelAtPeriodEnd = Boolean(subscription.cancel_at_period_end)
+
+  if (status && FORCE_DISABLE_STATUSES.has(status)) {
+    return {
+      isPro: false,
+      reason: `status_${status}`,
+      subscriptionStatus: status,
+      currentPeriodEndIso,
+    }
+  }
+
+  if (status && PRO_PLAN_STATUSES.has(status)) {
+    return {
+      isPro: true,
+      reason: `status_${status}`,
+      subscriptionStatus: status,
+      currentPeriodEndIso,
+    }
+  }
+
+  if (cancelAtPeriodEnd && periodActive) {
+    return {
+      isPro: true,
+      reason: 'cancel_at_period_end_period_active',
+      subscriptionStatus: status,
+      currentPeriodEndIso,
+    }
+  }
+
+  if (status && GRACE_STATUSES.has(status) && periodActive) {
+    return {
+      isPro: true,
+      reason: `grace_${status}_period_active`,
+      subscriptionStatus: status,
+      currentPeriodEndIso,
+    }
+  }
+
+  return {
+    isPro: false,
+    reason: periodActive ? 'status_not_pro' : 'period_ended_or_missing',
+    subscriptionStatus: status,
+    currentPeriodEndIso,
+  }
+}
+
+/**
+ * @param {string} customerId
+ * @param {string | null} subscriptionId
+ * @param {string | null} metadataUserId
+ * @returns {Promise<string | null>}
+ */
+async function resolveProfileIdForBilling(customerId, subscriptionId, metadataUserId) {
+  const candidateId = typeof metadataUserId === 'string' ? metadataUserId.trim() : ''
+  if (candidateId) return candidateId
+  if (!supabaseAdmin) return null
+
+  if (subscriptionId) {
+    const { data: bySub, error: bySubError } = await supabaseAdmin
+      .from('profiles')
+      .select('id')
+      .eq('stripe_subscription_id', subscriptionId)
+      .maybeSingle()
+    if (bySubError) {
+      console.error('[billing-sync] profile lookup by subscription failed:', bySubError.message)
+    } else if (bySub?.id) {
+      return String(bySub.id)
+    }
+  }
+
+  const { data: byCustomer, error: byCustomerError } = await supabaseAdmin
+    .from('profiles')
+    .select('id')
+    .eq('stripe_customer_id', customerId)
+    .maybeSingle()
+  if (byCustomerError) {
+    console.error('[billing-sync] profile lookup by customer failed:', byCustomerError.message)
+    return null
+  }
+  return byCustomer?.id ? String(byCustomer.id) : null
+}
+
+/**
+ * @param {{
+ *   eventType: string
+ *   customerId: string
+ *   subscription: Stripe.Subscription
+ *   metadataUserId: string | null
+ * }} params
+ */
+async function syncSubscriptionToUser(params) {
+  const { eventType, customerId, subscription, metadataUserId } = params
+  const subscriptionId = pickStripeId(subscription.id)
+  const profileId = await resolveProfileIdForBilling(customerId, subscriptionId, metadataUserId)
+  const access = evaluateSubscriptionAccess(subscription)
+
+  console.log('[billing-sync] event:', eventType)
+  console.log('[billing-sync] customer id:', customerId)
+  console.log('[billing-sync] subscription id:', subscriptionId ?? '(none)')
+  console.log('[billing-sync] profile id:', profileId ?? '(unresolved)')
+  console.log('[billing-sync] decision:', {
+    is_pro: access.isPro,
+    reason: access.reason,
+    subscription_status: access.subscriptionStatus,
+    current_period_end: access.currentPeriodEndIso,
+    cancel_at_period_end: Boolean(subscription.cancel_at_period_end),
+  })
+
+  if (!supabaseAdmin) {
+    console.error('[billing-sync] Supabase admin is not configured')
+    return { ok: false, skipped: 'no_supabase_admin' }
+  }
+  if (!profileId) {
+    console.error('[billing-sync] Could not resolve profile id for billing event')
+    return { ok: false, skipped: 'profile_not_found' }
+  }
+
+  const updatePayload = {
+    is_pro: access.isPro,
+    stripe_customer_id: customerId,
+    stripe_subscription_id: subscriptionId,
+    subscription_status: access.subscriptionStatus,
+    current_period_end: access.currentPeriodEndIso,
+    plan: access.isPro ? 'pro' : 'free',
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('profiles')
+    .update(updatePayload)
+    .eq('id', profileId)
+    .select('id')
+
+  if (error) {
+    console.error('[billing-sync] Supabase update failed:', error.message)
+    return { ok: false, skipped: 'supabase_error', error: error.message }
+  }
+  if (!data?.length) {
+    console.error('[billing-sync] Supabase update matched no rows for profile:', profileId)
+    return { ok: false, skipped: 'no_row_updated' }
+  }
+
+  return { ok: true, profileId, updatePayload }
+}
 
 const SECTION_SHAPE = [
   'Pre-Coaching Notes:',
@@ -336,60 +526,75 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
 
   console.log('[webhook/stripe] event type:', event.type)
 
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object
-    console.log('[webhook/stripe] checkout.session.completed session id:', session.id)
-
-    const userId = session.metadata?.userId
-    console.log('[webhook/stripe] metadata.userId:', userId != null && userId !== '' ? userId : '(missing)')
-
-    const customerId =
-      typeof session.customer === 'string'
-        ? session.customer
-        : session.customer && typeof session.customer === 'object' && 'id' in session.customer
-          ? session.customer.id
-          : null
-    const subscriptionId =
-      typeof session.subscription === 'string'
-        ? session.subscription
-        : session.subscription && typeof session.subscription === 'object' && 'id' in session.subscription
-          ? session.subscription.id
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object
+      const customerId = pickStripeId(session.customer)
+      const subscriptionId = pickStripeId(session.subscription)
+      const metadataUserId =
+        session.metadata && typeof session.metadata.userId === 'string'
+          ? session.metadata.userId
           : null
 
-    console.log('[webhook/stripe] customer id:', customerId ?? '(none)')
-    console.log('[webhook/stripe] subscription id:', subscriptionId ?? '(none)')
+      console.log('[webhook/stripe] checkout session id:', session.id)
+      console.log('[webhook/stripe] checkout metadata.userId:', metadataUserId ?? '(missing)')
 
-    if (!userId || String(userId).trim() === '') {
-      console.error(
-        '[webhook/stripe] FAIL: metadata.userId is missing or empty — cannot unlock Pro; fix checkout metadata',
-      )
-      return res.status(200).json({ received: true, skipped: 'missing_userId' })
-    }
+      if (!customerId || !subscriptionId) {
+        console.error(
+          '[webhook/stripe] checkout.session.completed missing customer or subscription id; skipping sync',
+        )
+        return res.status(200).json({ received: true, skipped: 'missing_customer_or_subscription' })
+      }
 
-    if (!supabaseAdmin) {
-      console.error('[webhook/stripe] Supabase admin not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY)')
-      return res.status(200).json({ received: true, skipped: 'no_supabase_admin' })
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('profiles')
-      .update({
-        is_pro: true,
-        stripe_customer_id: customerId,
-        stripe_subscription_id: subscriptionId,
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+      const result = await syncSubscriptionToUser({
+        eventType: event.type,
+        customerId,
+        subscription,
+        metadataUserId,
       })
-      .eq('id', String(userId).trim())
-      .select('id')
+      return res.status(200).json({ received: true, result })
+    }
 
-    if (error) {
-      console.error('[webhook/stripe] Supabase update failed:', error.message)
-      return res.status(200).json({ received: true, supabaseError: error.message })
+    if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
+      const subscription = event.data.object
+      const customerId = pickStripeId(subscription.customer)
+      if (!customerId) {
+        console.error('[webhook/stripe] subscription event missing customer id')
+        return res.status(200).json({ received: true, skipped: 'missing_customer_id' })
+      }
+
+      const result = await syncSubscriptionToUser({
+        eventType: event.type,
+        customerId,
+        subscription,
+        metadataUserId: null,
+      })
+      return res.status(200).json({ received: true, result })
     }
-    if (!data?.length) {
-      console.error('[webhook/stripe] Supabase update: no row updated for profile id:', String(userId).trim())
-      return res.status(200).json({ received: true, warning: 'no_row_updated' })
+
+    if (event.type === 'invoice.paid' || event.type === 'invoice.payment_failed') {
+      const invoice = event.data.object
+      const customerId = pickStripeId(invoice.customer)
+      const subscriptionId = pickStripeId(invoice.subscription)
+      if (!customerId || !subscriptionId) {
+        console.error('[webhook/stripe] invoice event missing customer or subscription id')
+        return res.status(200).json({ received: true, skipped: 'missing_customer_or_subscription' })
+      }
+
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+      const result = await syncSubscriptionToUser({
+        eventType: event.type,
+        customerId,
+        subscription,
+        metadataUserId: null,
+      })
+      return res.status(200).json({ received: true, result })
     }
-    console.log('[webhook/stripe] Supabase update succeeded for profile id:', String(userId).trim())
+  } catch (err) {
+    const message = typeof err?.message === 'string' ? err.message : 'webhook handling failed'
+    console.error('[webhook/stripe] Handler error:', message)
+    return res.status(200).json({ received: true, handlerError: message })
   }
 
   return res.status(200).json({ received: true })
@@ -397,6 +602,34 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
 
 app.use(cors({ origin: true }))
 app.use(express.json({ limit: '256kb' }))
+
+/**
+ * @param {import('express').Request} req
+ * @returns {Promise<{ userId: string | null; error: string | null }>}
+ */
+async function getAuthenticatedUserId(req) {
+  if (!supabaseAdmin) {
+    return { userId: null, error: 'Database is not configured.' }
+  }
+
+  const authHeader = req.headers.authorization
+  const bearerPrefix = 'Bearer '
+  if (!authHeader || typeof authHeader !== 'string' || !authHeader.startsWith(bearerPrefix)) {
+    return { userId: null, error: 'Missing or invalid authorization header.' }
+  }
+
+  const token = authHeader.slice(bearerPrefix.length).trim()
+  if (!token) {
+    return { userId: null, error: 'Missing access token.' }
+  }
+
+  const { data, error } = await supabaseAdmin.auth.getUser(token)
+  if (error || !data?.user?.id) {
+    return { userId: null, error: 'Could not verify user session.' }
+  }
+
+  return { userId: String(data.user.id), error: null }
+}
 
 app.post('/create-checkout-session', async (req, res) => {
   const stripeKeyEnv = process.env.STRIPE_SECRET_KEY?.trim() || ''
@@ -430,14 +663,14 @@ app.post('/create-checkout-session', async (req, res) => {
   })
 
   try {
-    const stripeCheckoutPriceId = 'price_1TJaIIHG6iuq9JCNXyc4I5Hb'
-    console.log('[create-checkout-session] Stripe price id:', stripeCheckoutPriceId)
+    console.log('[create-checkout-session] Stripe price id:', stripePriceId)
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
-      line_items: [{ price: stripeCheckoutPriceId, quantity: 1 }],
+      line_items: [{ price: stripePriceId, quantity: 1 }],
       success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}`,
       metadata: checkoutMetadata,
+      client_reference_id: userId,
     })
     if (!session.url) {
       return res.status(500).json({ error: 'Checkout session missing URL.' })
@@ -450,7 +683,7 @@ app.post('/create-checkout-session', async (req, res) => {
   }
 })
 
-app.post('/create-billing-portal-session', async (req, res) => {
+async function handleCreateCustomerPortalSession(req, res) {
   if (!stripe) {
     return res.status(503).json({ error: 'Stripe is not configured (missing STRIPE_SECRET_KEY).' })
   }
@@ -458,32 +691,65 @@ app.post('/create-billing-portal-session', async (req, res) => {
   if (!appUrl) {
     return res.status(503).json({ error: 'APP_URL is not configured.' })
   }
-  if (!supabaseAdmin) {
-    return res.status(503).json({ error: 'Database is not configured.' })
+  const auth = await getAuthenticatedUserId(req)
+  if (auth.error || !auth.userId) {
+    console.error('[create-customer-portal-session] auth failed:', auth.error)
+    return res.status(401).json({ error: auth.error || 'Unauthorized.' })
   }
-
-  const userId = typeof req.body?.userId === 'string' ? req.body.userId.trim() : ''
-  if (!userId) {
-    return res.status(400).json({ error: 'userId is required in JSON body.' })
-  }
+  const userId = auth.userId
 
   const { data: row, error } = await supabaseAdmin
     .from('profiles')
-    .select('stripe_customer_id')
+    .select('stripe_customer_id, stripe_subscription_id, is_pro, subscription_status, current_period_end')
     .eq('id', userId)
     .maybeSingle()
 
   if (error) {
-    console.error('[create-billing-portal-session] Supabase:', error.message)
+    console.error('[create-customer-portal-session] Supabase:', error.message)
     return res.status(500).json({ error: 'Could not load account.' })
   }
 
-  const customerId =
+  let customerId =
     row && typeof row.stripe_customer_id === 'string' ? row.stripe_customer_id.trim() : ''
+  const subscriptionId =
+    row && typeof row.stripe_subscription_id === 'string' ? row.stripe_subscription_id.trim() : ''
+
+  // Recover missing customer id from subscription if it exists.
+  if (!customerId && subscriptionId) {
+    try {
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+      const recoveredCustomerId = pickStripeId(subscription.customer)
+      if (recoveredCustomerId) {
+        customerId = recoveredCustomerId
+        const { error: updateError } = await supabaseAdmin
+          .from('profiles')
+          .update({ stripe_customer_id: recoveredCustomerId })
+          .eq('id', userId)
+        if (updateError) {
+          console.error(
+            '[create-customer-portal-session] failed to persist recovered customer id:',
+            updateError.message,
+          )
+        } else {
+          console.log('[create-customer-portal-session] recovered customer id from subscription for user:', userId)
+        }
+      }
+    } catch (e) {
+      console.error(
+        '[create-customer-portal-session] failed recovering customer id from subscription:',
+        typeof e?.message === 'string' ? e.message : 'unknown error',
+      )
+    }
+  }
+
   if (!customerId) {
+    console.error('[create-customer-portal-session] missing stripe customer and subscription ids', {
+      userId,
+      hasSubscriptionId: Boolean(subscriptionId),
+    })
     return res.status(400).json({
       error:
-        'No Stripe customer on file for this account. If you recently subscribed, wait a moment and try again, or contact support.',
+        'No Stripe subscription account was found for this user yet. If you just upgraded, wait a moment and refresh. If this persists, contact support.',
     })
   }
 
@@ -495,14 +761,23 @@ app.post('/create-billing-portal-session', async (req, res) => {
     if (!session.url) {
       return res.status(500).json({ error: 'Billing portal session missing URL.' })
     }
-    console.log('[create-billing-portal-session] ok for userId', userId)
+    console.log('[create-customer-portal-session] ok for user:', {
+      userId,
+      customerId,
+      subscriptionStatus: row?.subscription_status ?? null,
+      currentPeriodEnd: row?.current_period_end ?? null,
+      isPro: row?.is_pro ?? null,
+    })
     return res.json({ url: session.url })
   } catch (e) {
     const message = typeof e?.message === 'string' ? e.message : 'Billing portal failed'
-    console.error('[create-billing-portal-session]', message)
+    console.error('[create-customer-portal-session]', message)
     return res.status(500).json({ error: message })
   }
-})
+}
+
+app.post('/api/create-customer-portal-session', handleCreateCustomerPortalSession)
+app.post('/create-billing-portal-session', handleCreateCustomerPortalSession)
 
 app.post('/api/ai', async (req, res) => {
   const action = req.body?.action

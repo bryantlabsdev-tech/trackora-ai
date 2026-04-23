@@ -36,5 +36,5 @@ export function getCreateCheckoutSessionUrl(): string {
 }
 
 export function getCreateBillingPortalSessionUrl(): string {
-  return `${getApiBase()}/create-billing-portal-session`
+  return `${getApiBase()}/api/create-customer-portal-session`
 }
