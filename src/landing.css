@@ -600,3 +600,55 @@
     gap: 0.85rem;
   }
 }
+
+/* Google Ads landing (/landing) — benefit grid + how-it-works */
+.ads-landing-benefit-grid {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 640px) {
+  .ads-landing-benefit-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .ads-landing-benefit-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.ads-how-steps {
+  list-style: none;
+  margin: 0 auto;
+  padding: 0;
+  max-width: 48rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.ads-how-steps li {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  margin: 0;
+  padding: 1.05rem;
+  border-radius: var(--radius-2xl);
+  background: rgba(17, 24, 34, 0.65);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25);
+}
+
+.ads-how-step-num {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(99, 102, 241, 0.22);
+  color: #e0e7ff;
+  font-weight: 700;
+  font-size: 0.875rem;
+}

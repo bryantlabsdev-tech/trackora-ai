@@ -7,6 +7,7 @@ import CoachingApp from './CoachingApp'
 import AccountSettings from './components/AccountSettings'
 import AuthScreen from './components/AuthScreen'
 import LandingPage from './components/LandingPage'
+import AdsLandingPage from './components/AdsLandingPage'
 import ResetPasswordScreen from './components/ResetPasswordScreen'
 import { ProfileProvider } from './context/ProfileContext'
 import './App.css'
@@ -52,7 +53,13 @@ export default function App() {
     }
 
     if (session) {
-      if (route === 'landing' || route === 'login' || route === 'signup' || route === 'other') {
+      if (
+        route === 'landing' ||
+        route === 'ads-landing' ||
+        route === 'login' ||
+        route === 'signup' ||
+        route === 'other'
+      ) {
         replace('/app')
       }
     } else if (route === 'app' || route === 'other') {
@@ -90,6 +97,9 @@ export default function App() {
   if (!session) {
     if (route === 'landing') {
       return <LandingPage />
+    }
+    if (route === 'ads-landing') {
+      return <AdsLandingPage />
     }
     if (route === 'login') {
       return <AuthScreen client={client} defaultMode="signin" onBack={() => replace('/')} />
