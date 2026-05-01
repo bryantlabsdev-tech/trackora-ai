@@ -16,7 +16,6 @@ import {
 } from './lib/formatCoachingFormClipboard'
 import { parseCoachingLogMarkdown } from './lib/parseCoachingLog'
 import { getCreateCheckoutSessionUrl } from './lib/apiBase'
-import { supabase } from './lib/supabase'
 import './App.css'
 
 type UpgradeToProButtonProps = {
@@ -276,9 +275,7 @@ export default function CoachingApp() {
     setLastGenerationMs(null)
     setCopiedSectionKeys({})
     try {
-      const sessionResult = await supabase?.auth.getSession()
-      const accessToken = sessionResult?.data?.session?.access_token ?? null
-      const result = await requestCoachingLog(payload, { isTutorialRun, accessToken })
+      const result = await requestCoachingLog(payload, { isTutorialRun })
       setLogText(result.text)
       setLogSource(result.source)
       setLastGenerationMs(Date.now() - startedAt)
@@ -448,8 +445,13 @@ export default function CoachingApp() {
           </label>
           {profile && isFreeLimitReached(profile) && tutorialPhase === 'off' && (
             <div className="plan-limit-banner">
-              <p className="plan-limit-text">Free limit reached. Upgrade to Pro to continue.</p>
+              <p className="plan-limit-title">You&apos;ve used your 3 free AI coaching forms</p>
+              <p className="plan-limit-text">
+                Upgrade to Pro to generate unlimited coaching forms in seconds and save hours of manual work.
+              </p>
               <UpgradeToProButton userId={profile.id} email={profile.email} />
+              <p className="plan-limit-value">Most coaching forms take 10-15 minutes to write manually.</p>
+              <p className="plan-limit-urgency">Start generating instantly again after upgrading.</p>
             </div>
           )}
           <div
@@ -609,13 +611,14 @@ export default function CoachingApp() {
           />
           <div className="paywall-modal card" role="dialog" aria-modal="true" aria-labelledby="paywall-title">
             <h2 id="paywall-title" className="paywall-title">
-              You&apos;ve reached your free limit
+              You&apos;ve used your 3 free AI coaching forms
             </h2>
             <p className="paywall-body">
-              You&apos;ve already saved ~30+ minutes using TrackoraAI. Upgrade to keep generating unlimited
-              coaching forms and stay consistent.
+              Upgrade to Pro to generate unlimited coaching forms in seconds and save hours of manual work.
             </p>
             <p className="paywall-price">Only $8.99/month</p>
+            <p className="paywall-value-line">Most coaching forms take 10-15 minutes to write manually.</p>
+            <p className="paywall-urgency">Start generating instantly again after upgrading.</p>
             <div className="paywall-actions">
               <UpgradeToProButton userId={profile.id} email={profile.email} />
               <button

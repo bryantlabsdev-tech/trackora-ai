@@ -1,5 +1,6 @@
 import type { CoachingLogApiPayload } from '../types/coaching'
 import { getCoachingApiUrl } from '../lib/apiBase'
+import { supabase } from '../lib/supabase'
 import { sanitizeCoachingPayload } from '../../shared/sanitizeCoachingPayload.mjs'
 
 export type CoachingLogResult = {
@@ -96,12 +97,15 @@ function mapSuccessToResult(data: ApiJson): CoachingLogResult | null {
 
 async function fetchCoachingLogOnce(
   clean: CoachingLogApiPayload,
-  options?: { isTutorialRun?: boolean; accessToken?: string | null },
+  options?: { isTutorialRun?: boolean },
 ): Promise<CoachingLogResult | null> {
   const url = getCoachingApiUrl()
   const bodyPayload =
     options?.isTutorialRun === true ? { ...clean, isTutorialRun: true as const } : clean
   const payload = JSON.stringify({ action: 'coaching_log', payload: bodyPayload })
+  const sessionResult = await supabase?.auth.getSession()
+  const accessToken = sessionResult?.data?.session?.access_token ?? null
+  console.log('Sending auth token:', Boolean(accessToken))
 
   let res: Response
   try {
@@ -109,7 +113,7 @@ async function fetchCoachingLogOnce(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(options?.accessToken ? { Authorization: `Bearer ${options.accessToken}` } : {}),
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },
       body: payload,
     })
@@ -163,7 +167,7 @@ async function fetchCoachingLogOnce(
 
 export async function requestCoachingLog(
   payload: CoachingLogApiPayload,
-  options?: { isTutorialRun?: boolean; accessToken?: string | null },
+  options?: { isTutorialRun?: boolean },
 ): Promise<CoachingLogResult> {
   const clean = sanitizeCoachingPayload(payload)
 

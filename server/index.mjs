@@ -606,30 +606,30 @@ app.use(express.json({ limit: '256kb' }))
 
 /**
  * @param {import('express').Request} req
- * @returns {Promise<{ userId: string | null; error: string | null }>}
+ * @returns {Promise<{ userId: string | null; email: string | null; error: string | null }>}
  */
 async function getAuthenticatedUserId(req) {
   if (!supabaseAdmin) {
-    return { userId: null, error: 'Database is not configured.' }
+    return { userId: null, email: null, error: 'Database is not configured.' }
   }
 
   const authHeader = req.headers.authorization
   const bearerPrefix = 'Bearer '
   if (!authHeader || typeof authHeader !== 'string' || !authHeader.startsWith(bearerPrefix)) {
-    return { userId: null, error: 'Missing or invalid authorization header.' }
+    return { userId: null, email: null, error: 'Missing or invalid authorization header.' }
   }
 
   const token = authHeader.slice(bearerPrefix.length).trim()
   if (!token) {
-    return { userId: null, error: 'Missing access token.' }
+    return { userId: null, email: null, error: 'Missing access token.' }
   }
 
   const { data, error } = await supabaseAdmin.auth.getUser(token)
   if (error || !data?.user?.id) {
-    return { userId: null, error: 'Could not verify user session.' }
+    return { userId: null, email: null, error: 'Could not verify user session.' }
   }
 
-  return { userId: String(data.user.id), error: null }
+  return { userId: String(data.user.id), email: data.user.email ?? null, error: null }
 }
 
 async function getProfileForUser(userId) {
@@ -655,13 +655,20 @@ async function recordServerSideGenerationUsage(userId) {
   if (!supabaseAdmin) return
   const profileResult = await getProfileForUser(userId)
   if (!profileResult.profile || profileResult.error) {
-    console.error('[usage/server] skip increment, profile missing:', profileResult.error)
+    console.error('SERVER_USAGE_UPDATE_ERROR', { userId, error: profileResult.error || 'profile_missing' })
     return null
   }
   const profile = profileResult.profile
   if (profile.is_pro) {
     const snapshot = usageEnvelope(profile)
-    console.log('[usage/server] user:', userId, 'is_pro:', true, 'before:', snapshot.usageCount, 'after:', snapshot.usageCount, 'free_limit:', FREE_LIMIT, 'remaining:', snapshot.remaining)
+    console.log('SERVER_USAGE_APPLY', {
+      userId,
+      isPro: true,
+      usageCountBefore: snapshot.usageCount,
+      usageCountAfter: snapshot.usageCount,
+      freeLimit: FREE_LIMIT,
+      remaining: snapshot.remaining,
+    })
     return profile
   }
   const usageBefore = Math.max(0, Number(profile.usage_count || 0))
@@ -672,12 +679,19 @@ async function recordServerSideGenerationUsage(userId) {
     .select('id, is_pro, usage_count')
     .single()
   if (error) {
-    console.error('[usage/server] failed to persist usage increment:', error.message)
+    console.error('SERVER_USAGE_UPDATE_ERROR', { userId, error: error.message })
     return null
   }
   const usageAfter = Math.max(0, Number(updatedRow?.usage_count || 0))
   const remaining = Math.max(0, FREE_LIMIT - usageAfter)
-  console.log('[usage/server] user:', userId, 'is_pro:', false, 'before:', usageBefore, 'after:', usageAfter, 'free_limit:', FREE_LIMIT, 'remaining:', remaining)
+  console.log('SERVER_USAGE_APPLY', {
+    userId,
+    isPro: false,
+    usageCountBefore: usageBefore,
+    usageCountAfter: usageAfter,
+    freeLimit: FREE_LIMIT,
+    remaining,
+  })
   return updatedRow
 }
 
@@ -872,15 +886,30 @@ app.post('/api/create-customer-portal-session', handleCreateCustomerPortalSessio
 app.post('/create-billing-portal-session', handleCreateCustomerPortalSession)
 
 app.post('/api/ai', async (req, res) => {
+  console.log('SERVER_API_AI_HIT')
+  const authHeader = req.headers.authorization
+  if (!authHeader || typeof authHeader !== 'string') {
+    return res.status(401).json({ ok: false, error: 'Unauthorized' })
+  }
   const action = req.body?.action
   let payload = req.body?.payload
   let isTutorialRun = false
   let authUserId = null
+  let authUserEmail = null
   let usageSnapshot = null
   if (!action || typeof action !== 'string' || !payload || typeof payload !== 'object') {
     console.error('[api/ai] bad request: expected { action, payload }')
     return res.status(400).json({ ok: false, error: 'Expected { action, payload }.' })
   }
+
+  console.log('SERVER_API_AI_AUTH_HEADER_EXISTS', Boolean(req.headers.authorization))
+  const auth = await getAuthenticatedUserId(req)
+  if (auth.error || !auth.userId) {
+    return res.status(401).json({ ok: false, error: auth.error || 'Unauthorized.' })
+  }
+  authUserId = auth.userId
+  authUserEmail = auth.email
+  console.log('SERVER_API_AI_USER', { userId: authUserId, email: authUserEmail })
 
   if (action === 'coaching_log') {
     isTutorialRun = payload?.isTutorialRun === true
@@ -888,20 +917,22 @@ app.post('/api/ai', async (req, res) => {
     if (isTutorialRun) {
       console.log('[api/ai] coaching_log isTutorialRun (omit from usage; not passed to model)')
     }
-    console.log('[api/ai] auth header present:', Boolean(req.headers.authorization))
-    const auth = await getAuthenticatedUserId(req)
-    if (auth.error || !auth.userId) {
-      return res.status(401).json({ ok: false, error: auth.error || 'Unauthorized.' })
-    }
-    authUserId = auth.userId
-    console.log('[api/ai] authenticated user id:', authUserId)
     const profileResult = await getProfileForUser(authUserId)
     if (!profileResult.profile || profileResult.error) {
       return res.status(500).json({ ok: false, error: profileResult.error || 'Could not load profile.' })
     }
     const profile = profileResult.profile
     usageSnapshot = usageEnvelope(profile)
-    console.log('[usage/server] user:', authUserId, 'is_pro:', usageSnapshot.isPro, 'before:', usageSnapshot.usageCount, 'after:', usageSnapshot.usageCount, 'free_limit:', FREE_LIMIT, 'remaining:', usageSnapshot.remaining)
+    const shouldBlock = !profile.is_pro && usageSnapshot.usageCount >= FREE_LIMIT
+    console.log('SERVER_API_AI_USAGE_CHECK', {
+      userId: authUserId,
+      isPro: usageSnapshot.isPro,
+      usageCountBefore: usageSnapshot.usageCount,
+      usageCountAfter: usageSnapshot.usageCount,
+      freeLimit: FREE_LIMIT,
+      remaining: usageSnapshot.remaining,
+      shouldBlock,
+    })
     const freeLimitReached = !profile.is_pro && usageSnapshot.usageCount >= FREE_LIMIT
     if (!isTutorialRun && freeLimitReached) {
       return res.status(403).json({ ok: false, code: 'FREE_LIMIT_REACHED', error: 'Free limit reached' })
