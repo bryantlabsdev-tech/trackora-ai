@@ -13,7 +13,12 @@ export async function fetchProfile(client: SupabaseClient, userId: string): Prom
     return null
   }
   if (!data) return null
-  return mapRow(data as ProfileRow)
+  const raw = data as ProfileRow & { has_seen_tutorial?: boolean; bonus_ai_generations?: number }
+  return mapRow({
+    ...raw,
+    has_seen_tutorial: raw.has_seen_tutorial === true,
+    bonus_ai_generations: Math.max(0, Math.floor(Number(raw.bonus_ai_generations) || 0)),
+  })
 }
 
 /**
@@ -46,6 +51,15 @@ export async function incrementAiUsage(client: SupabaseClient): Promise<{ ok: bo
   const { error } = await client.rpc('increment_ai_usage')
   if (error) {
     console.error('[profiles] increment_ai_usage', error.message)
+    return { ok: false, error: error.message }
+  }
+  return { ok: true }
+}
+
+export async function markTutorialSeen(client: SupabaseClient): Promise<{ ok: boolean; error?: string }> {
+  const { error } = await client.rpc('mark_tutorial_seen')
+  if (error) {
+    console.error('[profiles] mark_tutorial_seen', error.message)
     return { ok: false, error: error.message }
   }
   return { ok: true }

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { ensureProfileRow, incrementAiUsage } from '../lib/profileApi'
+import { ensureProfileRow, incrementAiUsage, markTutorialSeen } from '../lib/profileApi'
 import { FREE_AI_GENERATION_LIMIT, type Profile } from '../types/profile'
 
 type ProfileContextValue = {
@@ -9,6 +9,7 @@ type ProfileContextValue = {
   error: string | null
   refresh: () => Promise<void>
   recordOpenAiGeneration: () => Promise<void>
+  completeTutorial: () => Promise<boolean>
 }
 
 const ProfileContext = createContext<ProfileContextValue | null>(null)
@@ -76,9 +77,12 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
 
   const recordOpenAiGeneration = useCallback(async () => {
     let localCountForSync: number | null = null
-    // Immediate UI response + persistence fallback so free limit is enforced even if RPC is down.
     setProfile((prev) => {
       if (!prev || prev.is_pro) return prev
+      const bonus = prev.bonus_ai_generations ?? 0
+      if (bonus > 0) {
+        return { ...prev, bonus_ai_generations: Math.max(0, bonus - 1) }
+      }
       const next = Math.min(FREE_AI_GENERATION_LIMIT, prev.usage_count + 1)
       localCountForSync = next
       writeUsageShadow(next)
@@ -105,6 +109,12 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
     }
   }, [client, refresh, readUsageShadow, usageShadowKey, writeUsageShadow])
 
+  const completeTutorial = useCallback(async () => {
+    const result = await markTutorialSeen(client)
+    await refresh()
+    return result.ok
+  }, [client, refresh])
+
   const value = useMemo(
     () => ({
       profile,
@@ -112,8 +122,9 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
       error,
       refresh,
       recordOpenAiGeneration,
+      completeTutorial,
     }),
-    [profile, loading, error, refresh, recordOpenAiGeneration],
+    [profile, loading, error, refresh, recordOpenAiGeneration, completeTutorial],
   )
 
   return <ProfileContext.Provider value={value}>{children}</ProfileContext.Provider>

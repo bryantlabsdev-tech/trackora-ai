@@ -9,6 +9,7 @@ import AuthScreen from './components/AuthScreen'
 import LandingPage from './components/LandingPage'
 import AdsLandingPage from './components/AdsLandingPage'
 import ResetPasswordScreen from './components/ResetPasswordScreen'
+import FeedbackFab from './components/FeedbackFab'
 import { ProfileProvider } from './context/ProfileContext'
 import './App.css'
 import './auth.css'
@@ -147,6 +148,7 @@ export default function App() {
           <CoachingApp />
         )}
       </ProfileProvider>
+      <FeedbackFab client={client} userId={session.user.id} userEmail={session.user.email ?? null} />
     </div>
   )
 }

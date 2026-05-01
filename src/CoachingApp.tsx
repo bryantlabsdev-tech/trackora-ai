@@ -89,12 +89,26 @@ function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
 
 const SESSION_WARMUP_TIP_KEY = 'trackora_warmup_tip_shown'
 
+const TUTORIAL_SAMPLE: SimpleCoachingInput = {
+  employeeName: 'Alex Rivera',
+  coachingReason: 'Late to opening shift twice this week',
+  notes: 'Arrived 10+ minutes after start time.',
+}
+
+type TutorialPhase = 'off' | 'welcome' | 'spotlight_generate' | 'spotlight_output'
+
 function emptyInput(): SimpleCoachingInput {
   return { employeeName: '', coachingReason: '', notes: '' }
 }
 
 export default function CoachingApp() {
-  const { profile, loading: profileLoading, error: profileError, recordOpenAiGeneration } = useProfile()
+  const {
+    profile,
+    loading: profileLoading,
+    error: profileError,
+    recordOpenAiGeneration,
+    completeTutorial,
+  } = useProfile()
   const [input, setInput] = useState<SimpleCoachingInput>(emptyInput)
   const [formMode, setFormMode] = useState<FormMode>('coaching')
   const [showValidation, setShowValidation] = useState(false)
@@ -107,6 +121,51 @@ export default function CoachingApp() {
   const [showWarmupNotice, setShowWarmupNotice] = useState(false)
   /** If sessionStorage is blocked, still only show the tip once per tab load */
   const warmupFallbackUsedRef = useRef(false)
+  const [tutorialPhase, setTutorialPhase] = useState<TutorialPhase>('off')
+  const tutorialProfileLoadedRef = useRef(false)
+  const tutorialPhaseRef = useRef<TutorialPhase>('off')
+  const generateBtnRef = useRef<HTMLButtonElement>(null)
+  const outputCardRef = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    tutorialPhaseRef.current = tutorialPhase
+  }, [tutorialPhase])
+
+  useEffect(() => {
+    if (profileLoading || !profile || tutorialProfileLoadedRef.current) return
+    tutorialProfileLoadedRef.current = true
+    if (!profile.has_seen_tutorial) {
+      setTutorialPhase('welcome')
+    } else {
+      setTutorialPhase('off')
+    }
+  }, [profileLoading, profile])
+
+  const dismissTutorialChrome = useCallback(() => {
+    setTutorialPhase('off')
+  }, [])
+
+  useEffect(() => {
+    if (tutorialPhase !== 'spotlight_output' || !logText) return
+    const el = outputCardRef.current
+    if (!el) return
+    window.requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }))
+  }, [tutorialPhase, logText])
+
+  useEffect(() => {
+    if (tutorialPhase !== 'spotlight_output') return
+    const id = window.setTimeout(() => dismissTutorialChrome(), 4200)
+    return () => clearTimeout(id)
+  }, [tutorialPhase, dismissTutorialChrome])
+
+  const onTutorialWelcomeContinue = useCallback(() => {
+    setInput(TUTORIAL_SAMPLE)
+    setShowValidation(false)
+    setTutorialPhase('spotlight_generate')
+    window.requestAnimationFrame(() => {
+      generateBtnRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }, [])
 
   useEffect(() => {
     if (!showWarmupNotice) return
@@ -166,6 +225,8 @@ export default function CoachingApp() {
     }
     if (shouldShowWarmupTip) setShowWarmupNotice(true)
 
+    const isTutorialRun = tutorialPhaseRef.current === 'spotlight_generate'
+
     setLoading(true)
     const startedAt = Date.now()
     setLogText(null)
@@ -173,14 +234,22 @@ export default function CoachingApp() {
     setLastGenerationMs(null)
     setCopiedSectionKeys({})
     try {
-      const result = await requestCoachingLog(payload)
+      const result = await requestCoachingLog(payload, { isTutorialRun })
       setLogText(result.text)
       setLogSource(result.source)
       setLastGenerationMs(Date.now() - startedAt)
 
       const generationSuccessful = typeof result.text === 'string' && result.text.trim().length > 0
+      if (generationSuccessful && tutorialPhaseRef.current === 'spotlight_generate') {
+        const ok = await completeTutorial()
+        if (!ok) console.error('[tutorial] could not persist tutorial completion / bonus')
+        setTutorialPhase('spotlight_output')
+      }
       const shouldIncrementUsage =
-        generationSuccessful && result.source === 'openai' && Boolean(profile && !profile.is_pro)
+        !isTutorialRun &&
+        generationSuccessful &&
+        result.source === 'openai' &&
+        Boolean(profile && !profile.is_pro)
       console.log('[usage] result.source:', result.source)
       console.log('[usage] generation successful:', generationSuccessful)
       console.log('[usage] incrementing usage (OpenAI only):', shouldIncrementUsage)
@@ -192,7 +261,7 @@ export default function CoachingApp() {
       setLoading(false)
       setShowWarmupNotice(false)
     }
-  }, [canGenerate, payload, profile, profileLoading, recordOpenAiGeneration])
+  }, [canGenerate, payload, profile, profileLoading, recordOpenAiGeneration, completeTutorial])
 
   const copySection = useCallback(async (rowKey: string, sectionLabel: string, body: string) => {
     const plain = formatSectionClipboardBlock(sectionLabel, body)
@@ -216,6 +285,7 @@ export default function CoachingApp() {
 
   return (
     <div className="app">
+      {tutorialPhase === 'spotlight_generate' && <div className="tutorial-dim" aria-hidden />}
       <header className="header">
         <p className="eyebrow">Trackora</p>
         <h1>Coaching form</h1>
@@ -308,21 +378,42 @@ export default function CoachingApp() {
               <UpgradeToProButton userId={profile.id} email={profile.email} />
             </div>
           )}
-          <button
-            type="button"
-            className="btn-primary btn-generate-premium"
-            disabled={loading || generationBlocked}
-            onClick={() => void generate()}
+          <div
+            className={
+              'tutorial-generate-anchor' + (tutorialPhase === 'spotlight_generate' ? ' is-tutorial-step' : '')
+            }
           >
-            {loading && <span className="spinner" aria-hidden />}
-            {loading ? 'Generating...' : 'Generate AI Coaching Form'}
-          </button>
+            {tutorialPhase === 'spotlight_generate' && (
+              <p className="tutorial-hint-bubble" id="tutorial-generate-hint">
+                Tap Generate
+              </p>
+            )}
+            <button
+              ref={generateBtnRef}
+              type="button"
+              className={
+                'btn-primary btn-generate-premium' +
+                (tutorialPhase === 'spotlight_generate' ? ' is-tutorial-focus' : '')
+              }
+              disabled={loading || generationBlocked}
+              onClick={() => void generate()}
+              aria-describedby={tutorialPhase === 'spotlight_generate' ? 'tutorial-generate-hint' : undefined}
+            >
+              {loading && <span className="spinner" aria-hidden />}
+              {loading ? 'Generating...' : 'Generate AI Coaching Form'}
+            </button>
+          </div>
           {showValidation && !canGenerate && (
             <p className="hint-error">Enter employee name and what the coaching form is for.</p>
           )}
         </section>
 
-        <section className="card output-card">
+        <section
+          className={
+            'card output-card' + (tutorialPhase === 'spotlight_output' ? ' is-tutorial-spotlight' : '')
+          }
+          ref={outputCardRef}
+        >
           <div className="output-top">
             <h2 className="card-title">Output</h2>
           </div>
@@ -394,6 +485,35 @@ export default function CoachingApp() {
       <p className="fine-print">
         API runs on your server; key stays in <code>.env</code>.
       </p>
+
+      {tutorialPhase === 'welcome' && (
+        <div
+          className="tutorial-welcome-root"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="tutorial-welcome-title"
+        >
+          <div className="tutorial-welcome-backdrop" aria-hidden />
+          <div className="tutorial-welcome-card card">
+            <h2 id="tutorial-welcome-title" className="tutorial-welcome-headline">
+              Create coaching forms in seconds
+            </h2>
+            <p className="tutorial-welcome-lede">AI drafts your form — tap once to generate.</p>
+            <button type="button" className="btn-primary tutorial-welcome-cta" onClick={onTutorialWelcomeContinue}>
+              Continue
+            </button>
+          </div>
+        </div>
+      )}
+
+      {tutorialPhase === 'spotlight_output' && logText && (
+        <div className="tutorial-output-hud">
+          <p className="tutorial-output-label">Your form</p>
+          <button type="button" className="tutorial-done-btn" onClick={dismissTutorialChrome}>
+            Done
+          </button>
+        </div>
+      )}
 
       {showWarmupNotice && (
         <div className="warmup-toast" role="status" aria-live="polite">

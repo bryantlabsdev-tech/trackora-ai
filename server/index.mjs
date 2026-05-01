@@ -830,7 +830,11 @@ app.post('/api/ai', async (req, res) => {
   }
 
   if (action === 'coaching_log') {
-    payload = { ...payload, ...sanitizeCoachingPayload(payload) }
+    const isTutorialRun = payload?.isTutorialRun === true
+    payload = sanitizeCoachingPayload(payload)
+    if (isTutorialRun) {
+      console.log('[api/ai] coaching_log isTutorialRun (omit from usage; not passed to model)')
+    }
   }
 
   const rawName =

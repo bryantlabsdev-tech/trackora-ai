@@ -60,9 +60,12 @@ function mapSuccessToResult(data: ApiJson): CoachingLogResult | null {
 
 async function fetchCoachingLogOnce(
   clean: CoachingLogApiPayload,
+  options?: { isTutorialRun?: boolean },
 ): Promise<CoachingLogResult | null> {
   const url = getCoachingApiUrl()
-  const payload = JSON.stringify({ action: 'coaching_log', payload: clean })
+  const bodyPayload =
+    options?.isTutorialRun === true ? { ...clean, isTutorialRun: true as const } : clean
+  const payload = JSON.stringify({ action: 'coaching_log', payload: bodyPayload })
 
   let res: Response
   try {
@@ -117,14 +120,17 @@ async function fetchCoachingLogOnce(
   return mapped
 }
 
-export async function requestCoachingLog(payload: CoachingLogApiPayload): Promise<CoachingLogResult> {
+export async function requestCoachingLog(
+  payload: CoachingLogApiPayload,
+  options?: { isTutorialRun?: boolean },
+): Promise<CoachingLogResult> {
   const clean = sanitizeCoachingPayload(payload)
 
-  let result = await fetchCoachingLogOnce(clean)
+  let result = await fetchCoachingLogOnce(clean, options)
   if (result) return result
 
   console.warn('[coaching API] retrying once after failure')
-  result = await fetchCoachingLogOnce(clean)
+  result = await fetchCoachingLogOnce(clean, options)
   if (result) return result
 
   console.error('[coaching API] all attempts failed; using client fallback (not OpenAI)')
