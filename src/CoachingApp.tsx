@@ -97,7 +97,42 @@ const TUTORIAL_SAMPLE: SimpleCoachingInput = {
   notes: 'Arrived 10+ minutes after start time.',
 }
 
-type TutorialPhase = 'off' | 'welcome' | 'spotlight_generate' | 'spotlight_output'
+type TutorialPhase = 'off' | 'walkthrough' | 'spotlight_generate' | 'spotlight_output'
+
+const TUTORIAL_STEPS = [
+  {
+    title: 'Generate coaching forms in seconds',
+    body: 'Fill in the employee name and what the coaching is for. Use the quick topic dropdown to get started instantly.',
+  },
+  {
+    title: 'Use quick topics to move faster',
+    body: 'Select a quick coaching topic from the dropdown to autofill your form. You can still customize everything.',
+  },
+  {
+    title: 'AI does the heavy lifting',
+    body: "Click 'Generate AI Coaching Form' and get a structured coaching form instantly.",
+  },
+  {
+    title: 'Try it free',
+    body: 'You get 3 free AI coaching forms to test it out.',
+  },
+  {
+    title: "Upgrade when you're ready",
+    body: 'Upgrade to Pro to generate unlimited coaching forms and save hours every week.',
+  },
+] as const
+
+const QUICK_TOPICS = [
+  'Low accessory sales',
+  'Attendance',
+  'Not hitting goal',
+  'Customer experience',
+  'Low conversion',
+  'Needs confidence',
+  'Recognition: Great sales day',
+  'Keys',
+  'Uniform',
+] as const
 
 function emptyInput(): SimpleCoachingInput {
   return { employeeName: '', coachingReason: '', notes: '' }
@@ -115,6 +150,7 @@ export default function CoachingApp() {
   const { triggerPostTutorialFeedbackNudge } = usePostTutorialFeedbackNudge()
   const [input, setInput] = useState<SimpleCoachingInput>(emptyInput)
   const [formMode, setFormMode] = useState<FormMode>('coaching')
+  const [quickTopicSelection, setQuickTopicSelection] = useState('')
   const [showValidation, setShowValidation] = useState(false)
   const [generationError, setGenerationError] = useState<string | null>(null)
   const [logText, setLogText] = useState<string | null>(null)
@@ -128,6 +164,7 @@ export default function CoachingApp() {
   /** If sessionStorage is blocked, still only show the tip once per tab load */
   const warmupFallbackUsedRef = useRef(false)
   const [tutorialPhase, setTutorialPhase] = useState<TutorialPhase>('off')
+  const [tutorialStepIndex, setTutorialStepIndex] = useState(0)
   const tutorialPhaseRef = useRef<TutorialPhase>('off')
   const generateBtnRef = useRef<HTMLButtonElement>(null)
   const outputCardRef = useRef<HTMLElement>(null)
@@ -140,8 +177,8 @@ export default function CoachingApp() {
     if (profileLoading || !profile) return
     if (!profile.has_seen_tutorial) {
       setTutorialPhase((p) => {
-        if (p === 'welcome' || p === 'spotlight_generate' || p === 'spotlight_output') return p
-        return 'welcome'
+        if (p === 'walkthrough' || p === 'spotlight_generate' || p === 'spotlight_output') return p
+        return 'walkthrough'
       })
     } else {
       setTutorialPhase((p) => (p === 'spotlight_output' ? p : 'off'))
@@ -149,7 +186,8 @@ export default function CoachingApp() {
   }, [profileLoading, profile?.has_seen_tutorial])
 
   useEffect(() => {
-    if (tutorialPhase !== 'welcome') return
+    if (tutorialPhase !== 'walkthrough') return
+    setTutorialStepIndex(0)
     setLogText(null)
     setLogSource(null)
     setLastGenerationMs(null)
@@ -176,13 +214,22 @@ export default function CoachingApp() {
     return () => clearTimeout(id)
   }, [tutorialPhase, dismissTutorialChrome])
 
-  const onTutorialWelcomeContinue = useCallback(() => {
+  const onTutorialStartGenerating = useCallback(() => {
     setInput(TUTORIAL_SAMPLE)
+    setQuickTopicSelection('Attendance')
     setShowValidation(false)
     setTutorialPhase('spotlight_generate')
     window.requestAnimationFrame(() => {
       generateBtnRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     })
+  }, [])
+
+  const onTutorialNext = useCallback(() => {
+    setTutorialStepIndex((s) => Math.min(TUTORIAL_STEPS.length - 1, s + 1))
+  }, [])
+
+  const onTutorialBack = useCallback(() => {
+    setTutorialStepIndex((s) => Math.max(0, s - 1))
   }, [])
 
   useEffect(() => {
@@ -346,6 +393,24 @@ export default function CoachingApp() {
     }, 1800)
   }, [])
 
+  const applyQuickTopic = useCallback((topic: string) => {
+    const recognitionPrefix = 'Recognition:'
+    const isRecognition = topic.startsWith(recognitionPrefix)
+    const nextTopic = isRecognition ? topic.slice(recognitionPrefix.length).trim() : topic
+    setFormMode(isRecognition ? 'recognition' : 'coaching')
+    setInput((s) => ({ ...s, coachingReason: nextTopic }))
+    setShowValidation(false)
+  }, [])
+
+  const onQuickTopicChange = useCallback(
+    (value: string) => {
+      setQuickTopicSelection(value)
+      if (!value) return
+      applyQuickTopic(value)
+    },
+    [applyQuickTopic],
+  )
+
   const parsedSections = useMemo(() => (logText ? parseCoachingLogMarkdown(logText) : []), [logText])
 
   const invalidName = showValidation && !input.employeeName.trim()
@@ -353,6 +418,10 @@ export default function CoachingApp() {
 
   const generationBlocked =
     profileLoading || !profile || (!canUseAiGeneration(profile) && tutorialPhase !== 'spotlight_generate')
+  const tutorialStep = TUTORIAL_STEPS[tutorialStepIndex]
+  const tutorialHighlightQuickTopics = tutorialPhase === 'walkthrough' && tutorialStepIndex === 1
+  const tutorialHighlightGenerate =
+    tutorialPhase === 'spotlight_generate' || (tutorialPhase === 'walkthrough' && tutorialStepIndex === 2)
 
   return (
     <div className="app">
@@ -443,6 +512,21 @@ export default function CoachingApp() {
               rows={4}
             />
           </label>
+          <label className={'field' + (tutorialHighlightQuickTopics ? ' tutorial-field-highlight' : '')}>
+            <span className="label-text">Quick coaching topics</span>
+            <select
+              className={'field-control' + (tutorialHighlightQuickTopics ? ' is-tutorial-focus' : '')}
+              value={quickTopicSelection}
+              onChange={(e) => onQuickTopicChange(e.target.value)}
+            >
+              <option value="">Select a quick topic...</option>
+              {QUICK_TOPICS.map((topic) => (
+                <option key={topic} value={topic}>
+                  {topic}
+                </option>
+              ))}
+            </select>
+          </label>
           {profile && isFreeLimitReached(profile) && tutorialPhase === 'off' && (
             <div className="plan-limit-banner">
               <p className="plan-limit-title">You&apos;ve used your 3 free AI coaching forms</p>
@@ -470,7 +554,7 @@ export default function CoachingApp() {
               className={
                 'btn-primary btn-generate-premium' +
                 (profile && isFreeLimitReached(profile) && tutorialPhase === 'off' ? ' is-limit-reached' : '') +
-                (tutorialPhase === 'spotlight_generate' ? ' is-tutorial-focus' : '')
+                (tutorialHighlightGenerate ? ' is-tutorial-focus' : '')
               }
               disabled={loading || generationBlocked}
               onClick={() => void generate()}
@@ -572,7 +656,7 @@ export default function CoachingApp() {
         API runs on your server; key stays in <code>.env</code>.
       </p>
 
-      {tutorialPhase === 'welcome' && (
+      {tutorialPhase === 'walkthrough' && (
         <div
           className="tutorial-welcome-root"
           role="dialog"
@@ -581,13 +665,30 @@ export default function CoachingApp() {
         >
           <div className="tutorial-welcome-backdrop" aria-hidden />
           <div className="tutorial-welcome-card card">
+            <p className="tutorial-step-kicker">
+              Step {tutorialStepIndex + 1} of {TUTORIAL_STEPS.length}
+            </p>
             <h2 id="tutorial-welcome-title" className="tutorial-welcome-headline">
-              Create coaching forms in seconds
+              {tutorialStep.title}
             </h2>
-            <p className="tutorial-welcome-lede">AI drafts your form — tap once to generate.</p>
-            <button type="button" className="btn-primary tutorial-welcome-cta" onClick={onTutorialWelcomeContinue}>
-              Continue
-            </button>
+            <p className="tutorial-welcome-lede">{tutorialStep.body}</p>
+            <p className="tutorial-note">Each form can save 10-15 minutes of manual work.</p>
+            <div className="tutorial-actions-row">
+              {tutorialStepIndex > 0 && (
+                <button type="button" className="btn-secondary tutorial-back-btn" onClick={onTutorialBack}>
+                  Back
+                </button>
+              )}
+              {tutorialStepIndex < TUTORIAL_STEPS.length - 1 ? (
+                <button type="button" className="btn-primary tutorial-welcome-cta" onClick={onTutorialNext}>
+                  Continue
+                </button>
+              ) : (
+                <button type="button" className="btn-primary tutorial-welcome-cta" onClick={onTutorialStartGenerating}>
+                  Start generating
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
