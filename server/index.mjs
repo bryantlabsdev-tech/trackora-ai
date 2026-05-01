@@ -37,6 +37,7 @@ const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY?.trim() || ''
 const stripe = stripeSecretKey ? new Stripe(stripeSecretKey) : null
+const FREE_LIMIT = Number.parseInt(process.env.FREE_LIMIT || '3', 10)
 const stripePriceId =
   process.env.STRIPE_PRICE_ID?.trim() ||
   process.env.STRIPE_PRO_PRICE_ID?.trim() ||
@@ -631,6 +632,55 @@ async function getAuthenticatedUserId(req) {
   return { userId: String(data.user.id), error: null }
 }
 
+async function getProfileForUser(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('profiles')
+    .select('id, is_pro, usage_count')
+    .eq('id', userId)
+    .maybeSingle()
+  if (error || !data) {
+    return { profile: null, error: error?.message || 'Could not load profile.' }
+  }
+  return { profile: data, error: null }
+}
+
+function usageEnvelope(profile) {
+  const usageCount = Math.max(0, Number(profile?.usage_count || 0))
+  const isPro = Boolean(profile?.is_pro)
+  const remaining = isPro ? Number.POSITIVE_INFINITY : Math.max(0, FREE_LIMIT - usageCount)
+  return { usageCount, isPro, remaining, freeLimit: FREE_LIMIT }
+}
+
+async function recordServerSideGenerationUsage(userId) {
+  if (!supabaseAdmin) return
+  const profileResult = await getProfileForUser(userId)
+  if (!profileResult.profile || profileResult.error) {
+    console.error('[usage/server] skip increment, profile missing:', profileResult.error)
+    return null
+  }
+  const profile = profileResult.profile
+  if (profile.is_pro) {
+    const snapshot = usageEnvelope(profile)
+    console.log('[usage/server] user:', userId, 'is_pro:', true, 'before:', snapshot.usageCount, 'after:', snapshot.usageCount, 'free_limit:', FREE_LIMIT, 'remaining:', snapshot.remaining)
+    return profile
+  }
+  const usageBefore = Math.max(0, Number(profile.usage_count || 0))
+  const { data: updatedRow, error } = await supabaseAdmin
+    .from('profiles')
+    .update({ usage_count: usageBefore + 1 })
+    .eq('id', userId)
+    .select('id, is_pro, usage_count')
+    .single()
+  if (error) {
+    console.error('[usage/server] failed to persist usage increment:', error.message)
+    return null
+  }
+  const usageAfter = Math.max(0, Number(updatedRow?.usage_count || 0))
+  const remaining = Math.max(0, FREE_LIMIT - usageAfter)
+  console.log('[usage/server] user:', userId, 'is_pro:', false, 'before:', usageBefore, 'after:', usageAfter, 'free_limit:', FREE_LIMIT, 'remaining:', remaining)
+  return updatedRow
+}
+
 app.post('/create-checkout-session', async (req, res) => {
   const stripeKeyEnv = process.env.STRIPE_SECRET_KEY?.trim() || ''
   console.log('[create-checkout-session] STRIPE_SECRET_KEY present:', Boolean(stripeKeyEnv))
@@ -824,16 +874,37 @@ app.post('/create-billing-portal-session', handleCreateCustomerPortalSession)
 app.post('/api/ai', async (req, res) => {
   const action = req.body?.action
   let payload = req.body?.payload
+  let isTutorialRun = false
+  let authUserId = null
+  let usageSnapshot = null
   if (!action || typeof action !== 'string' || !payload || typeof payload !== 'object') {
     console.error('[api/ai] bad request: expected { action, payload }')
     return res.status(400).json({ ok: false, error: 'Expected { action, payload }.' })
   }
 
   if (action === 'coaching_log') {
-    const isTutorialRun = payload?.isTutorialRun === true
+    isTutorialRun = payload?.isTutorialRun === true
     payload = sanitizeCoachingPayload(payload)
     if (isTutorialRun) {
       console.log('[api/ai] coaching_log isTutorialRun (omit from usage; not passed to model)')
+    }
+    console.log('[api/ai] auth header present:', Boolean(req.headers.authorization))
+    const auth = await getAuthenticatedUserId(req)
+    if (auth.error || !auth.userId) {
+      return res.status(401).json({ ok: false, error: auth.error || 'Unauthorized.' })
+    }
+    authUserId = auth.userId
+    console.log('[api/ai] authenticated user id:', authUserId)
+    const profileResult = await getProfileForUser(authUserId)
+    if (!profileResult.profile || profileResult.error) {
+      return res.status(500).json({ ok: false, error: profileResult.error || 'Could not load profile.' })
+    }
+    const profile = profileResult.profile
+    usageSnapshot = usageEnvelope(profile)
+    console.log('[usage/server] user:', authUserId, 'is_pro:', usageSnapshot.isPro, 'before:', usageSnapshot.usageCount, 'after:', usageSnapshot.usageCount, 'free_limit:', FREE_LIMIT, 'remaining:', usageSnapshot.remaining)
+    const freeLimitReached = !profile.is_pro && usageSnapshot.usageCount >= FREE_LIMIT
+    if (!isTutorialRun && freeLimitReached) {
+      return res.status(403).json({ ok: false, code: 'FREE_LIMIT_REACHED', error: 'Free limit reached' })
     }
   }
 
@@ -863,7 +934,20 @@ app.post('/api/ai', async (req, res) => {
         reason: 'no_openai_key',
         mode: payloadForAi?.mode,
       })
-      return res.json({ ok: true, text, source: 'deterministic', usedOpenAI: false })
+      if (!isTutorialRun && authUserId) {
+        const updated = await recordServerSideGenerationUsage(authUserId)
+        if (updated) usageSnapshot = usageEnvelope(updated)
+      }
+      return res.json({
+        ok: true,
+        text,
+        source: 'deterministic',
+        usedOpenAI: false,
+        usageCount: usageSnapshot?.usageCount ?? null,
+        remaining: usageSnapshot?.remaining ?? null,
+        freeLimit: usageSnapshot?.freeLimit ?? FREE_LIMIT,
+        isPro: usageSnapshot?.isPro ?? null,
+      })
     }
     return res.json({
       ok: false,
@@ -898,7 +982,20 @@ app.post('/api/ai', async (req, res) => {
         mode: payloadForAi?.mode,
         issuePrimary,
       })
-      return res.json({ ok: true, text, source: 'openai', usedOpenAI: true })
+      if (action === 'coaching_log' && !isTutorialRun && authUserId) {
+        const updated = await recordServerSideGenerationUsage(authUserId)
+        if (updated) usageSnapshot = usageEnvelope(updated)
+      }
+      return res.json({
+        ok: true,
+        text,
+        source: 'openai',
+        usedOpenAI: true,
+        usageCount: usageSnapshot?.usageCount ?? null,
+        remaining: usageSnapshot?.remaining ?? null,
+        freeLimit: usageSnapshot?.freeLimit ?? FREE_LIMIT,
+        isPro: usageSnapshot?.isPro ?? null,
+      })
     }
 
     const text =
@@ -909,12 +1006,20 @@ app.post('/api/ai', async (req, res) => {
         usedOpenAI: true,
         mode: payloadForAi?.mode,
       })
+      if (!isTutorialRun && authUserId) {
+        const updated = await recordServerSideGenerationUsage(authUserId)
+        if (updated) usageSnapshot = usageEnvelope(updated)
+      }
     }
     return res.json({
       ok: true,
       text,
       source: 'openai',
       usedOpenAI: true,
+      usageCount: usageSnapshot?.usageCount ?? null,
+      remaining: usageSnapshot?.remaining ?? null,
+      freeLimit: usageSnapshot?.freeLimit ?? FREE_LIMIT,
+      isPro: usageSnapshot?.isPro ?? null,
     })
   } catch (err) {
     const code = err.code || 'UNKNOWN'
@@ -932,12 +1037,20 @@ app.post('/api/ai', async (req, res) => {
         mode: payloadForAi?.mode,
         error: message,
       })
+      if (!isTutorialRun && authUserId) {
+        const updated = await recordServerSideGenerationUsage(authUserId)
+        if (updated) usageSnapshot = usageEnvelope(updated)
+      }
       return res.json({
         ok: true,
         text,
         source: 'deterministic',
         usedOpenAI: false,
         error: message,
+        usageCount: usageSnapshot?.usageCount ?? null,
+        remaining: usageSnapshot?.remaining ?? null,
+        freeLimit: usageSnapshot?.freeLimit ?? FREE_LIMIT,
+        isPro: usageSnapshot?.isPro ?? null,
       })
     }
     return res.json({

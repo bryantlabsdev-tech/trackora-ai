@@ -1,6 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { ensureProfileRow, incrementAiUsage, markTutorialSeen } from '../lib/profileApi'
+import {
+  ensureProfileRow,
+  incrementAiUsage,
+  markPaywallSeen,
+  markTutorialSeen,
+  resetTutorialForReplay,
+} from '../lib/profileApi'
 import { FREE_AI_GENERATION_LIMIT, type Profile } from '../types/profile'
 
 type ProfileContextValue = {
@@ -8,8 +14,11 @@ type ProfileContextValue = {
   loading: boolean
   error: string | null
   refresh: () => Promise<void>
+  applyUsageSnapshot: (snapshot: { usageCount: number; isPro: boolean }) => void
   recordOpenAiGeneration: () => Promise<void>
   completeTutorial: () => Promise<boolean>
+  replayTutorialFromSettings: () => Promise<boolean>
+  acknowledgePaywallSeen: () => Promise<boolean>
 }
 
 const ProfileContext = createContext<ProfileContextValue | null>(null)
@@ -109,8 +118,31 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
     }
   }, [client, refresh, readUsageShadow, usageShadowKey, writeUsageShadow])
 
+  const applyUsageSnapshot = useCallback((snapshot: { usageCount: number; isPro: boolean }) => {
+    setProfile((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        is_pro: snapshot.isPro,
+        usage_count: Math.max(0, Math.floor(snapshot.usageCount)),
+      }
+    })
+  }, [])
+
   const completeTutorial = useCallback(async () => {
     const result = await markTutorialSeen(client)
+    await refresh()
+    return result.ok
+  }, [client, refresh])
+
+  const replayTutorialFromSettings = useCallback(async () => {
+    const result = await resetTutorialForReplay(client)
+    await refresh()
+    return result.ok
+  }, [client, refresh])
+
+  const acknowledgePaywallSeen = useCallback(async () => {
+    const result = await markPaywallSeen(client)
     await refresh()
     return result.ok
   }, [client, refresh])
@@ -121,10 +153,23 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
       loading,
       error,
       refresh,
+      applyUsageSnapshot,
       recordOpenAiGeneration,
       completeTutorial,
+      replayTutorialFromSettings,
+      acknowledgePaywallSeen,
     }),
-    [profile, loading, error, refresh, recordOpenAiGeneration, completeTutorial],
+    [
+      profile,
+      loading,
+      error,
+      refresh,
+      applyUsageSnapshot,
+      recordOpenAiGeneration,
+      completeTutorial,
+      replayTutorialFromSettings,
+      acknowledgePaywallSeen,
+    ],
   )
 
   return <ProfileContext.Provider value={value}>{children}</ProfileContext.Provider>

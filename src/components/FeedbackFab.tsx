@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useState } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { usePostTutorialFeedbackNudge } from '../context/PostTutorialFeedbackNudgeContext'
 
 type FeedbackFabProps = {
   client: SupabaseClient
@@ -8,6 +9,7 @@ type FeedbackFabProps = {
 }
 
 export default function FeedbackFab({ client, userId, userEmail }: FeedbackFabProps) {
+  const { feedbackNudgeActive } = usePostTutorialFeedbackNudge()
   const titleId = useId()
   const thanksId = useId()
   const [open, setOpen] = useState(false)
@@ -66,9 +68,17 @@ export default function FeedbackFab({ client, userId, userEmail }: FeedbackFabPr
 
   return (
     <>
+      {feedbackNudgeActive && (
+        <div className="feedback-nudge-toast" role="status" aria-live="polite">
+          <p className="feedback-nudge-text">
+            If anything feels off or confusing, tap the Feedback button at the bottom — we’re actively improving
+            this.
+          </p>
+        </div>
+      )}
       <button
         type="button"
-        className="feedback-fab"
+        className={'feedback-fab' + (feedbackNudgeActive ? ' is-nudge-pulse' : '')}
         onClick={() => setOpen(true)}
         aria-haspopup="dialog"
         aria-expanded={open}

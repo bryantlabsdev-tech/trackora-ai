@@ -7,11 +7,12 @@ import { freeGenerationsRemainingLabel } from '../types/profile'
 type AccountSettingsProps = {
   userId: string
   email: string | null
+  onGoToCoaching: () => void
   onSignOut: () => Promise<void>
 }
 
-export default function AccountSettings({ userId, email, onSignOut }: AccountSettingsProps) {
-  const { profile, loading, error } = useProfile()
+export default function AccountSettings({ userId, email, onGoToCoaching, onSignOut }: AccountSettingsProps) {
+  const { profile, loading, error, replayTutorialFromSettings } = useProfile()
   const [checkoutLoading, setCheckoutLoading] = useState(false)
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
   const [portalLoading, setPortalLoading] = useState(false)
@@ -19,6 +20,8 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
   const [passwordLoading, setPasswordLoading] = useState(false)
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [passwordInfo, setPasswordInfo] = useState<string | null>(null)
+  const [tutorialReplayLoading, setTutorialReplayLoading] = useState(false)
+  const [tutorialReplayError, setTutorialReplayError] = useState<string | null>(null)
 
   const planLabel = profile?.is_pro ? 'Pro' : 'Free'
   const usageLabel = useMemo(() => {
@@ -32,7 +35,7 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
       profile?.stripe_subscription_id?.trim() ||
       profile?.subscription_status?.trim(),
   )
-  const subscriptionStatusLabel = profile?.subscription_status?.trim() || (profile?.is_pro ? 'active' : 'none')
+  const subscriptionStatusLabel = profile?.is_pro ? 'active' : 'inactive'
   const currentPeriodEndLabel = useMemo(() => {
     if (!profile?.current_period_end) return null
     const d = new Date(profile.current_period_end)
@@ -115,6 +118,21 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
     }
   }
 
+  async function handleViewTutorial() {
+    setTutorialReplayError(null)
+    setTutorialReplayLoading(true)
+    try {
+      const ok = await replayTutorialFromSettings()
+      if (!ok) {
+        setTutorialReplayError('Could not reset tutorial. Try again.')
+        return
+      }
+      onGoToCoaching()
+    } finally {
+      setTutorialReplayLoading(false)
+    }
+  }
+
   async function handleChangePassword() {
     if (!supabase) {
       setPasswordError('Auth is not configured. Please refresh and try again.')
@@ -166,20 +184,6 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
         </article>
 
         <article className="card settings-card">
-          <h2 className="card-title">Plan</h2>
-          <div className="settings-row">
-            <span className="settings-label">Current Plan</span>
-            <span className={'settings-pill ' + (profile?.is_pro ? 'is-pro' : 'is-free')}>{planLabel}</span>
-          </div>
-          <div className="settings-row settings-row-stacked">
-            <span className="settings-label">Usage</span>
-            <span className="settings-value">{usageLabel}</span>
-          </div>
-          {loading && <p className="settings-note">Loading account data...</p>}
-          {error && <p className="settings-error">{error}</p>}
-        </article>
-
-        <article className="card settings-card">
           <h2 className="card-title">Security</h2>
           <p className="settings-note">Send yourself a secure password reset link using Supabase.</p>
           <button
@@ -197,13 +201,19 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
         <article className="card settings-card">
           <h2 className="card-title">Subscription</h2>
           <div className="settings-row">
-            <span className="settings-label">Plan</span>
+            <span className="settings-label">Current Plan</span>
             <span className={'settings-pill ' + (profile?.is_pro ? 'is-pro' : 'is-free')}>{planLabel}</span>
           </div>
           <div className="settings-row">
             <span className="settings-label">Status</span>
             <span className="settings-value">{subscriptionStatusLabel}</span>
           </div>
+          <div className="settings-row settings-row-stacked">
+            <span className="settings-label">Usage</span>
+            <span className="settings-value">{usageLabel}</span>
+          </div>
+          {loading && <p className="settings-note">Loading account data...</p>}
+          {error && <p className="settings-error">{error}</p>}
           {currentPeriodEndLabel && (
             <div className="settings-row settings-row-stacked">
               <span className="settings-label">{cancelAtPeriodEndLikely ? 'Access until' : 'Renews on'}</span>
@@ -240,6 +250,20 @@ export default function AccountSettings({ userId, email, onSignOut }: AccountSet
           <button type="button" className="btn-secondary settings-btn settings-signout" onClick={() => void onSignOut()}>
             Sign Out
           </button>
+        </article>
+
+        <article className="card settings-card settings-support-card">
+          <h2 className="card-title">Support</h2>
+          <button
+            type="button"
+            className="btn-secondary settings-btn settings-support-btn"
+            onClick={() => void handleViewTutorial()}
+            disabled={tutorialReplayLoading}
+          >
+            {tutorialReplayLoading ? 'Opening…' : 'View Tutorial'}
+          </button>
+          <p className="settings-help-caption">Replay the quick walkthrough.</p>
+          {tutorialReplayError && <p className="settings-error">{tutorialReplayError}</p>}
         </article>
       </section>
     </main>

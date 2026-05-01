@@ -1,12 +1,17 @@
 import type { CoachingLogApiPayload } from '../types/coaching'
 import { getCoachingApiUrl } from '../lib/apiBase'
-import { getCoachingLogFallback } from '../lib/coachingLogFallback'
 import { sanitizeCoachingPayload } from '../../shared/sanitizeCoachingPayload.mjs'
 
 export type CoachingLogResult = {
   text: string
   /** openai = model; deterministic = server template; fallback = client offline */
   source: 'openai' | 'deterministic' | 'fallback'
+  usage?: {
+    usageCount: number
+    remaining: number
+    freeLimit: number
+    isPro: boolean
+  }
 }
 
 type ApiJson = {
@@ -16,6 +21,25 @@ type ApiJson = {
   usedOpenAI?: boolean
   useFallback?: boolean
   error?: string
+  code?: string
+  usageCount?: number
+  remaining?: number
+  freeLimit?: number
+  isPro?: boolean
+}
+
+export class FreeLimitReachedError extends Error {
+  constructor(message = 'Free limit reached') {
+    super(message)
+    this.name = 'FreeLimitReachedError'
+  }
+}
+
+export class CoachingApiError extends Error {
+  constructor(message = 'Could not generate coaching form') {
+    super(message)
+    this.name = 'CoachingApiError'
+  }
 }
 
 function mapSuccessToResult(data: ApiJson): CoachingLogResult | null {
@@ -55,12 +79,24 @@ function mapSuccessToResult(data: ApiJson): CoachingLogResult | null {
     openaiActuallyUsed,
   })
 
-  return { text, source: serverSource }
+  const usage =
+    Number.isFinite(data.usageCount) &&
+    Number.isFinite(data.remaining) &&
+    Number.isFinite(data.freeLimit) &&
+    typeof data.isPro === 'boolean'
+      ? {
+          usageCount: Number(data.usageCount),
+          remaining: Number(data.remaining),
+          freeLimit: Number(data.freeLimit),
+          isPro: data.isPro,
+        }
+      : undefined
+  return { text, source: serverSource, usage }
 }
 
 async function fetchCoachingLogOnce(
   clean: CoachingLogApiPayload,
-  options?: { isTutorialRun?: boolean },
+  options?: { isTutorialRun?: boolean; accessToken?: string | null },
 ): Promise<CoachingLogResult | null> {
   const url = getCoachingApiUrl()
   const bodyPayload =
@@ -71,7 +107,10 @@ async function fetchCoachingLogOnce(
   try {
     res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options?.accessToken ? { Authorization: `Bearer ${options.accessToken}` } : {}),
+      },
       body: payload,
     })
   } catch (e) {
@@ -107,8 +146,10 @@ async function fetchCoachingLogOnce(
   })
 
   if (!res.ok) {
-    console.error('[coaching API] HTTP error', res.status, data)
-    return null
+    if (res.status === 403 && data?.code === 'FREE_LIMIT_REACHED') {
+      throw new FreeLimitReachedError(data?.error || 'Free limit reached')
+    }
+    throw new CoachingApiError(data?.error || `HTTP ${res.status}`)
   }
 
   const mapped = mapSuccessToResult(data)
@@ -122,17 +163,27 @@ async function fetchCoachingLogOnce(
 
 export async function requestCoachingLog(
   payload: CoachingLogApiPayload,
-  options?: { isTutorialRun?: boolean },
+  options?: { isTutorialRun?: boolean; accessToken?: string | null },
 ): Promise<CoachingLogResult> {
   const clean = sanitizeCoachingPayload(payload)
 
-  let result = await fetchCoachingLogOnce(clean, options)
+  let result: CoachingLogResult | null = null
+  try {
+    result = await fetchCoachingLogOnce(clean, options)
+  } catch (err) {
+    if (err instanceof FreeLimitReachedError || err instanceof CoachingApiError) throw err
+    console.error('[coaching API] unexpected error', err)
+  }
   if (result) return result
 
   console.warn('[coaching API] retrying once after failure')
-  result = await fetchCoachingLogOnce(clean, options)
+  try {
+    result = await fetchCoachingLogOnce(clean, options)
+  } catch (err) {
+    if (err instanceof FreeLimitReachedError || err instanceof CoachingApiError) throw err
+    console.error('[coaching API] retry unexpected error', err)
+  }
   if (result) return result
 
-  console.error('[coaching API] all attempts failed; using client fallback (not OpenAI)')
-  return { text: getCoachingLogFallback(clean), source: 'fallback' }
+  throw new CoachingApiError('Could not generate coaching form. Please try again.')
 }

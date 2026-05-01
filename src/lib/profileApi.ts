@@ -13,10 +13,15 @@ export async function fetchProfile(client: SupabaseClient, userId: string): Prom
     return null
   }
   if (!data) return null
-  const raw = data as ProfileRow & { has_seen_tutorial?: boolean; bonus_ai_generations?: number }
+  const raw = data as ProfileRow & {
+    has_seen_tutorial?: boolean
+    has_seen_paywall?: boolean
+    bonus_ai_generations?: number
+  }
   return mapRow({
     ...raw,
     has_seen_tutorial: raw.has_seen_tutorial === true,
+    has_seen_paywall: raw.has_seen_paywall === true,
     bonus_ai_generations: Math.max(0, Math.floor(Number(raw.bonus_ai_generations) || 0)),
   })
 }
@@ -60,6 +65,26 @@ export async function markTutorialSeen(client: SupabaseClient): Promise<{ ok: bo
   const { error } = await client.rpc('mark_tutorial_seen')
   if (error) {
     console.error('[profiles] mark_tutorial_seen', error.message)
+    return { ok: false, error: error.message }
+  }
+  return { ok: true }
+}
+
+export async function resetTutorialForReplay(
+  client: SupabaseClient,
+): Promise<{ ok: boolean; error?: string }> {
+  const { error } = await client.rpc('reset_tutorial_for_replay')
+  if (error) {
+    console.error('[profiles] reset_tutorial_for_replay', error.message)
+    return { ok: false, error: error.message }
+  }
+  return { ok: true }
+}
+
+export async function markPaywallSeen(client: SupabaseClient): Promise<{ ok: boolean; error?: string }> {
+  const { error } = await client.rpc('mark_paywall_seen')
+  if (error) {
+    console.error('[profiles] mark_paywall_seen', error.message)
     return { ok: false, error: error.message }
   }
   return { ok: true }

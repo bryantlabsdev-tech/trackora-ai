@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { requestCoachingLog } from './api/requestCoachingLog'
+import { FreeLimitReachedError, requestCoachingLog } from './api/requestCoachingLog'
 import { useProfile } from './context/ProfileContext'
+import { usePostTutorialFeedbackNudge } from './context/PostTutorialFeedbackNudgeContext'
 import type { CoachingLogApiPayload, FormMode, SimpleCoachingInput } from './types/coaching'
 import {
   canUseAiGeneration,
@@ -15,6 +16,7 @@ import {
 } from './lib/formatCoachingFormClipboard'
 import { parseCoachingLogMarkdown } from './lib/parseCoachingLog'
 import { getCreateCheckoutSessionUrl } from './lib/apiBase'
+import { supabase } from './lib/supabase'
 import './App.css'
 
 type UpgradeToProButtonProps = {
@@ -88,6 +90,7 @@ function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
 }
 
 const SESSION_WARMUP_TIP_KEY = 'trackora_warmup_tip_shown'
+const SESSION_PAYWALL_SHOWN_KEY = 'trackora_paywall_shown_this_session'
 
 const TUTORIAL_SAMPLE: SimpleCoachingInput = {
   employeeName: 'Alex Rivera',
@@ -106,23 +109,26 @@ export default function CoachingApp() {
     profile,
     loading: profileLoading,
     error: profileError,
-    recordOpenAiGeneration,
+    applyUsageSnapshot,
     completeTutorial,
+    refresh,
   } = useProfile()
+  const { triggerPostTutorialFeedbackNudge } = usePostTutorialFeedbackNudge()
   const [input, setInput] = useState<SimpleCoachingInput>(emptyInput)
   const [formMode, setFormMode] = useState<FormMode>('coaching')
   const [showValidation, setShowValidation] = useState(false)
+  const [generationError, setGenerationError] = useState<string | null>(null)
   const [logText, setLogText] = useState<string | null>(null)
   const [logSource, setLogSource] = useState<'openai' | 'deterministic' | 'fallback' | null>(null)
   const [loading, setLoading] = useState(false)
   const [lastGenerationMs, setLastGenerationMs] = useState<number | null>(null)
+  const [showLimitPaywall, setShowLimitPaywall] = useState(false)
   /** Per-section copy feedback, keyed by `${sec.id}-${index}` */
   const [copiedSectionKeys, setCopiedSectionKeys] = useState<Record<string, boolean>>({})
   const [showWarmupNotice, setShowWarmupNotice] = useState(false)
   /** If sessionStorage is blocked, still only show the tip once per tab load */
   const warmupFallbackUsedRef = useRef(false)
   const [tutorialPhase, setTutorialPhase] = useState<TutorialPhase>('off')
-  const tutorialProfileLoadedRef = useRef(false)
   const tutorialPhaseRef = useRef<TutorialPhase>('off')
   const generateBtnRef = useRef<HTMLButtonElement>(null)
   const outputCardRef = useRef<HTMLElement>(null)
@@ -132,14 +138,27 @@ export default function CoachingApp() {
   }, [tutorialPhase])
 
   useEffect(() => {
-    if (profileLoading || !profile || tutorialProfileLoadedRef.current) return
-    tutorialProfileLoadedRef.current = true
+    if (profileLoading || !profile) return
     if (!profile.has_seen_tutorial) {
-      setTutorialPhase('welcome')
+      setTutorialPhase((p) => {
+        if (p === 'welcome' || p === 'spotlight_generate' || p === 'spotlight_output') return p
+        return 'welcome'
+      })
     } else {
-      setTutorialPhase('off')
+      setTutorialPhase((p) => (p === 'spotlight_output' ? p : 'off'))
     }
-  }, [profileLoading, profile])
+  }, [profileLoading, profile?.has_seen_tutorial])
+
+  useEffect(() => {
+    if (tutorialPhase !== 'welcome') return
+    setLogText(null)
+    setLogSource(null)
+    setLastGenerationMs(null)
+  }, [tutorialPhase])
+
+  useEffect(() => {
+    if (profile?.is_pro) setShowLimitPaywall(false)
+  }, [profile?.is_pro])
 
   const dismissTutorialChrome = useCallback(() => {
     setTutorialPhase('off')
@@ -191,7 +210,10 @@ export default function CoachingApp() {
       setShowValidation(true)
       return
     }
-    const blocked = profileLoading || !profile || !canUseAiGeneration(profile)
+    const blocked =
+      profileLoading ||
+      !profile ||
+      (tutorialPhaseRef.current !== 'spotlight_generate' && !canUseAiGeneration(profile))
     const usageCount = profile?.usage_count ?? null
     const isPro = profile?.is_pro ?? null
     const remainingForLog =
@@ -202,9 +224,29 @@ export default function CoachingApp() {
     console.log('[usage] generation blocked:', blocked)
 
     if (blocked) {
+      if (tutorialPhaseRef.current === 'off' && profile && !profile.is_pro && isFreeLimitReached(profile)) {
+        let alreadyShown = false
+        try {
+          alreadyShown =
+            typeof sessionStorage !== 'undefined' && sessionStorage.getItem(SESSION_PAYWALL_SHOWN_KEY) === '1'
+        } catch {
+          alreadyShown = false
+        }
+        if (!alreadyShown) {
+          setShowLimitPaywall(true)
+          try {
+            if (typeof sessionStorage !== 'undefined') {
+              sessionStorage.setItem(SESSION_PAYWALL_SHOWN_KEY, '1')
+            }
+          } catch {
+            // ignore storage errors
+          }
+        }
+      }
       return
     }
     setShowValidation(false)
+    setGenerationError(null)
 
     let shouldShowWarmupTip = false
     try {
@@ -234,16 +276,25 @@ export default function CoachingApp() {
     setLastGenerationMs(null)
     setCopiedSectionKeys({})
     try {
-      const result = await requestCoachingLog(payload, { isTutorialRun })
+      const sessionResult = await supabase?.auth.getSession()
+      const accessToken = sessionResult?.data?.session?.access_token ?? null
+      const result = await requestCoachingLog(payload, { isTutorialRun, accessToken })
       setLogText(result.text)
       setLogSource(result.source)
       setLastGenerationMs(Date.now() - startedAt)
+      if (result.usage && !isTutorialRun) {
+        applyUsageSnapshot({
+          usageCount: result.usage.usageCount,
+          isPro: result.usage.isPro,
+        })
+      }
 
       const generationSuccessful = typeof result.text === 'string' && result.text.trim().length > 0
       if (generationSuccessful && tutorialPhaseRef.current === 'spotlight_generate') {
         const ok = await completeTutorial()
         if (!ok) console.error('[tutorial] could not persist tutorial completion / bonus')
         setTutorialPhase('spotlight_output')
+        triggerPostTutorialFeedbackNudge()
       }
       const shouldIncrementUsage =
         !isTutorialRun &&
@@ -254,14 +305,36 @@ export default function CoachingApp() {
       console.log('[usage] generation successful:', generationSuccessful)
       console.log('[usage] incrementing usage (OpenAI only):', shouldIncrementUsage)
 
-      if (shouldIncrementUsage) {
-        await recordOpenAiGeneration()
+      if (generationSuccessful && !isTutorialRun) {
+        await refresh()
       }
+    } catch (err) {
+      if (err instanceof FreeLimitReachedError) {
+        setShowLimitPaywall(true)
+        try {
+          if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem(SESSION_PAYWALL_SHOWN_KEY, '1')
+          }
+        } catch {
+          // ignore storage errors
+        }
+        return
+      }
+      setGenerationError('Could not generate right now. Please try again.')
     } finally {
       setLoading(false)
       setShowWarmupNotice(false)
     }
-  }, [canGenerate, payload, profile, profileLoading, recordOpenAiGeneration, completeTutorial])
+  }, [
+    canGenerate,
+    payload,
+    profile,
+    profileLoading,
+    applyUsageSnapshot,
+    completeTutorial,
+    refresh,
+    triggerPostTutorialFeedbackNudge,
+  ])
 
   const copySection = useCallback(async (rowKey: string, sectionLabel: string, body: string) => {
     const plain = formatSectionClipboardBlock(sectionLabel, body)
@@ -281,7 +354,8 @@ export default function CoachingApp() {
   const invalidName = showValidation && !input.employeeName.trim()
   const invalidReason = showValidation && !input.coachingReason.trim()
 
-  const generationBlocked = profileLoading || !profile || !canUseAiGeneration(profile)
+  const generationBlocked =
+    profileLoading || !profile || (!canUseAiGeneration(profile) && tutorialPhase !== 'spotlight_generate')
 
   return (
     <div className="app">
@@ -372,7 +446,7 @@ export default function CoachingApp() {
               rows={4}
             />
           </label>
-          {profile && isFreeLimitReached(profile) && (
+          {profile && isFreeLimitReached(profile) && tutorialPhase === 'off' && (
             <div className="plan-limit-banner">
               <p className="plan-limit-text">Free limit reached. Upgrade to Pro to continue.</p>
               <UpgradeToProButton userId={profile.id} email={profile.email} />
@@ -393,6 +467,7 @@ export default function CoachingApp() {
               type="button"
               className={
                 'btn-primary btn-generate-premium' +
+                (profile && isFreeLimitReached(profile) && tutorialPhase === 'off' ? ' is-limit-reached' : '') +
                 (tutorialPhase === 'spotlight_generate' ? ' is-tutorial-focus' : '')
               }
               disabled={loading || generationBlocked}
@@ -403,9 +478,13 @@ export default function CoachingApp() {
               {loading ? 'Generating...' : 'Generate AI Coaching Form'}
             </button>
           </div>
+          {profile && isFreeLimitReached(profile) && tutorialPhase === 'off' && (
+            <p className="upgrade-inline-hint">Upgrade to continue generating</p>
+          )}
           {showValidation && !canGenerate && (
             <p className="hint-error">Enter employee name and what the coaching form is for.</p>
           )}
+          {generationError && <p className="hint-error">{generationError}</p>}
         </section>
 
         <section
@@ -477,6 +556,11 @@ export default function CoachingApp() {
                   )
                 })}
               </div>
+              {profile && profile.usage_count >= 1 && tutorialPhase === 'off' && (
+                <p className="post-generation-time-saved">
+                  This would normally take 10-15 minutes to write manually.
+                </p>
+              )}
             </div>
           )}
         </section>
@@ -512,6 +596,37 @@ export default function CoachingApp() {
           <button type="button" className="tutorial-done-btn" onClick={dismissTutorialChrome}>
             Done
           </button>
+        </div>
+      )}
+
+      {showLimitPaywall && profile && !profile.is_pro && (
+        <div className="paywall-modal-root" role="presentation">
+          <button
+            type="button"
+            className="paywall-modal-backdrop"
+            aria-label="Close paywall"
+            onClick={() => setShowLimitPaywall(false)}
+          />
+          <div className="paywall-modal card" role="dialog" aria-modal="true" aria-labelledby="paywall-title">
+            <h2 id="paywall-title" className="paywall-title">
+              You&apos;ve reached your free limit
+            </h2>
+            <p className="paywall-body">
+              You&apos;ve already saved ~30+ minutes using TrackoraAI. Upgrade to keep generating unlimited
+              coaching forms and stay consistent.
+            </p>
+            <p className="paywall-price">Only $8.99/month</p>
+            <div className="paywall-actions">
+              <UpgradeToProButton userId={profile.id} email={profile.email} />
+              <button
+                type="button"
+                className="btn-secondary paywall-secondary"
+                onClick={() => setShowLimitPaywall(false)}
+              >
+                Maybe later
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

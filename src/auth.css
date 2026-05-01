@@ -397,7 +397,7 @@
 .settings-page {
   max-width: 56rem;
   margin: 0 auto;
-  padding: 2rem 1.25rem 3rem;
+  padding: 2rem 1.25rem max(5rem, calc(3rem + env(safe-area-inset-bottom, 0px)));
 }
 
 .settings-header {
@@ -429,6 +429,31 @@
 
 .settings-card {
   min-height: 10rem;
+}
+
+/* Full-width support row — always visible below other settings (desktop grid spans both columns). */
+.settings-support-card {
+  min-height: auto;
+  padding-bottom: max(1.25rem, env(safe-area-inset-bottom, 0px));
+  border-color: rgba(129, 140, 248, 0.35);
+  background: linear-gradient(165deg, rgba(99, 102, 241, 0.1), rgba(17, 24, 34, 0.65));
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
+}
+
+@media (min-width: 900px) {
+  .settings-support-card {
+    grid-column: 1 / -1;
+  }
+}
+
+.settings-support-card .card-title {
+  color: var(--text);
+}
+
+.settings-support-btn {
+  margin-top: 0.15rem;
+  min-height: 2.75rem;
+  font-weight: 600;
 }
 
 .settings-row {
@@ -492,6 +517,13 @@
   line-height: 1.45;
 }
 
+.settings-help-caption {
+  margin: 0.55rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 .settings-error {
   margin: 0.6rem 0 0;
   color: var(--danger);
@@ -521,7 +553,7 @@
   }
 
   .settings-page {
-    padding: 1.2rem 1rem 2rem;
+    padding: 1.2rem 1rem max(4.5rem, calc(2rem + env(safe-area-inset-bottom, 0px)));
   }
 
   .settings-email {

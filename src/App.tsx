@@ -10,6 +10,7 @@ import LandingPage from './components/LandingPage'
 import AdsLandingPage from './components/AdsLandingPage'
 import ResetPasswordScreen from './components/ResetPasswordScreen'
 import FeedbackFab from './components/FeedbackFab'
+import { PostTutorialFeedbackNudgeProvider } from './context/PostTutorialFeedbackNudgeContext'
 import { ProfileProvider } from './context/ProfileContext'
 import './App.css'
 import './auth.css'
@@ -135,20 +136,23 @@ export default function App() {
           Sign out
         </button>
       </div>
-      <ProfileProvider client={client} userId={session.user.id} email={session.user.email ?? null}>
-        {view === 'settings' ? (
-          <AccountSettings
-            userId={session.user.id}
-            email={session.user.email ?? null}
-            onSignOut={async () => {
-              await client.auth.signOut()
-            }}
-          />
-        ) : (
-          <CoachingApp />
-        )}
-      </ProfileProvider>
-      <FeedbackFab client={client} userId={session.user.id} userEmail={session.user.email ?? null} />
+      <PostTutorialFeedbackNudgeProvider>
+        <ProfileProvider client={client} userId={session.user.id} email={session.user.email ?? null}>
+          {view === 'settings' ? (
+            <AccountSettings
+              userId={session.user.id}
+              email={session.user.email ?? null}
+              onGoToCoaching={() => setView('coaching')}
+              onSignOut={async () => {
+                await client.auth.signOut()
+              }}
+            />
+          ) : (
+            <CoachingApp />
+          )}
+        </ProfileProvider>
+        <FeedbackFab client={client} userId={session.user.id} userEmail={session.user.email ?? null} />
+      </PostTutorialFeedbackNudgeProvider>
     </div>
   )
 }
