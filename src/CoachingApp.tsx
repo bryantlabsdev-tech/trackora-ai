@@ -94,20 +94,6 @@ const SESSION_PAYWALL_SHOWN_KEY = 'trackora_paywall_shown_this_session'
 /** Single standard headline wherever the free tier is exhausted (paywall, banners). */
 const FREE_LIMIT_HEADLINE = "You've used all 3 free coaching generations."
 
-/** Rotate value messaging so we do not repeat one line everywhere. */
-const POST_GENERATION_VALUE_LINES = [
-  'Build stronger coaching in less time.',
-  'Turn messy performance notes into clear coaching.',
-  'Coach faster without sounding generic.',
-  'Give your team better direction before the shift is over.',
-] as const
-
-function pickRotatingLine(lines: readonly string[], seed: number): string {
-  if (lines.length === 0) return ''
-  const i = Math.abs(Math.trunc(seed)) % lines.length
-  return lines[i]!
-}
-
 const TUTORIAL_SAMPLE: SimpleCoachingInput = {
   employeeName: 'Alex Rivera',
   coachingReason: 'Late to opening shift twice this week',
@@ -125,7 +111,7 @@ const TUTORIAL_STEPS: TutorialStep[] = [
   },
   {
     title: 'Move faster with quick topics',
-    body: 'Select a quick topic from the dropdown to instantly fill your coaching form. You can still customize everything.',
+    body: 'Choose a topic from the Quick coaching topics menu to fill the form — then edit anything before you generate.',
   },
   {
     title: 'Get a complete coaching form instantly',
@@ -146,90 +132,192 @@ const TUTORIAL_STEPS: TutorialStep[] = [
   },
 ]
 
-const QUICK_TOPICS = [
-  'Low accessory sales',
-  'Attendance',
-  'Not hitting goal',
-  'Customer experience',
-  'Low conversion',
-  'Needs confidence',
-  'Recognition: Great sales day',
-  'Keys',
-  'Uniform',
-] as const
-
-type QuickCoachPreset = {
+type CoachingTopicOption = {
+  id: string
   label: string
   mode: FormMode
   input: SimpleCoachingInput
 }
 
-/** One-tap starters above the form — sets mode, fills fields; user can edit before Generate. */
-const QUICK_COACH_PRESETS: QuickCoachPreset[] = [
+type CoachingTopicGroup = { groupLabel: string; options: CoachingTopicOption[] }
+
+/** Single source for the Quick coaching topics dropdown; always fills Mobile Expert + reason/notes + mode. */
+const COACHING_TOPIC_GROUPS: CoachingTopicGroup[] = [
   {
-    label: 'Late to shift',
-    mode: 'coaching',
-    input: {
-      employeeName: 'Mobile Expert',
-      coachingReason: 'Late to shift',
-      notes: 'Discuss punctuality and on-time arrival.',
-    },
+    groupLabel: 'Metrics & common',
+    options: [
+      {
+        id: 'late-shift',
+        label: 'Late to shift',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Late to shift',
+          notes: 'Discuss punctuality and on-time arrival.',
+        },
+      },
+      {
+        id: 'low-aps',
+        label: 'Low APS',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Low APS (Attempts Per Shift)',
+          notes: 'Add current APS and goal if known. Focus on getting customers to the tablet for eligibility.',
+        },
+      },
+      {
+        id: 'high-hpa',
+        label: 'High HPA',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'High HPA (Hours Per Activation)',
+          notes: 'Add numbers if known. High HPA = too long between postpaid activations.',
+        },
+      },
+      {
+        id: 'high-mpt',
+        label: 'High MPT',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'High MPT (Minutes Per Transaction)',
+          notes: 'Add context if known. High MPT = too much gap between customer interactions.',
+        },
+      },
+      {
+        id: 'not-engaging',
+        label: 'Not engaging customers',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Not engaging customers on the sales floor',
+          notes: 'Describe what you observed (approach, acknowledgment, handoffs).',
+        },
+      },
+      {
+        id: 'misuse-keys',
+        label: 'Misuse of keys',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Misuse of keys / key control',
+          notes: 'Brief facts: what happened and policy expectation.',
+        },
+      },
+      {
+        id: 'recognition-general',
+        label: 'Recognition',
+        mode: 'recognition',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Strong performance — recognition',
+          notes: 'What went well today (sales floor, customer experience, activations, etc.).',
+        },
+      },
+    ],
   },
   {
-    label: 'Low APS',
-    mode: 'coaching',
-    input: {
-      employeeName: 'Mobile Expert',
-      coachingReason: 'Low APS (Attempts Per Shift)',
-      notes: 'Add current APS and goal if known. Focus on getting customers to the tablet for eligibility.',
-    },
-  },
-  {
-    label: 'High HPA',
-    mode: 'coaching',
-    input: {
-      employeeName: 'Mobile Expert',
-      coachingReason: 'High HPA (Hours Per Activation)',
-      notes: 'Add numbers if known. High HPA = too long between postpaid activations.',
-    },
-  },
-  {
-    label: 'High MPT',
-    mode: 'coaching',
-    input: {
-      employeeName: 'Mobile Expert',
-      coachingReason: 'High MPT (Minutes Per Transaction)',
-      notes: 'Add context if known. High MPT = too much gap between customer interactions.',
-    },
-  },
-  {
-    label: 'Not engaging customers',
-    mode: 'coaching',
-    input: {
-      employeeName: 'Mobile Expert',
-      coachingReason: 'Not engaging customers on the sales floor',
-      notes: 'Describe what you observed (approach, acknowledgment, handoffs).',
-    },
-  },
-  {
-    label: 'Misuse of keys',
-    mode: 'coaching',
-    input: {
-      employeeName: 'Mobile Expert',
-      coachingReason: 'Misuse of keys / key control',
-      notes: 'Brief facts: what happened and policy expectation.',
-    },
-  },
-  {
-    label: 'Recognition',
-    mode: 'recognition',
-    input: {
-      employeeName: 'Mobile Expert',
-      coachingReason: 'Strong performance — recognition',
-      notes: 'What went well today (sales floor, customer experience, activations, etc.).',
-    },
+    groupLabel: 'More topics',
+    options: [
+      {
+        id: 'low-accessory-sales',
+        label: 'Low accessory sales',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Low accessory sales',
+          notes: 'Add attach rate or revenue context and goal if known.',
+        },
+      },
+      {
+        id: 'attendance',
+        label: 'Attendance',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Attendance / punctuality',
+          notes: 'Dates, pattern, and policy reminder as needed.',
+        },
+      },
+      {
+        id: 'not-hitting-goal',
+        label: 'Not hitting goal',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Not hitting goal (sales or metrics)',
+          notes: 'Which metric, current vs goal, and next steps.',
+        },
+      },
+      {
+        id: 'customer-experience',
+        label: 'Customer experience',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Customer experience',
+          notes: 'Observations, feedback, and expectations.',
+        },
+      },
+      {
+        id: 'low-conversion',
+        label: 'Low conversion',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Low conversion',
+          notes: 'Where in the funnel; numbers if known.',
+        },
+      },
+      {
+        id: 'needs-confidence',
+        label: 'Needs confidence',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Needs confidence on the sales floor',
+          notes: 'Specific situations to build on.',
+        },
+      },
+      {
+        id: 'uniform',
+        label: 'Uniform',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Uniform / dress code',
+          notes: 'What was out of compliance and standard expectation.',
+        },
+      },
+      {
+        id: 'keys-general',
+        label: 'Keys',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Keys / key control',
+          notes: 'Brief facts and policy expectation.',
+        },
+      },
+      {
+        id: 'recognition-great-sales-day',
+        label: 'Recognition: Great sales day',
+        mode: 'recognition',
+        input: {
+          employeeName: 'Mobile Expert',
+          coachingReason: 'Great sales day — recognition',
+          notes: 'Specific wins to celebrate.',
+        },
+      },
+    ],
   },
 ]
+
+const COACHING_TOPIC_BY_ID: Record<string, CoachingTopicOption> = Object.fromEntries(
+  COACHING_TOPIC_GROUPS.flatMap((g) => g.options.map((o) => [o.id, o] as const)),
+)
 
 function emptyInput(): SimpleCoachingInput {
   return { employeeName: '', coachingReason: '', notes: '' }
@@ -265,8 +353,6 @@ export default function CoachingApp() {
   const tutorialPhaseRef = useRef<TutorialPhase>('off')
   const generateBtnRef = useRef<HTMLButtonElement>(null)
   const outputCardRef = useRef<HTMLElement>(null)
-  /** Rotates post-output value one-liners without triggering extra renders during generation. */
-  const [valueLineSeed, setValueLineSeed] = useState(0)
   const [outputHelpfulness, setOutputHelpfulness] = useState<'yes' | 'no' | null>(null)
 
   useEffect(() => {
@@ -316,7 +402,7 @@ export default function CoachingApp() {
 
   const onTutorialStartGenerating = useCallback(() => {
     setInput(TUTORIAL_SAMPLE)
-    setQuickTopicSelection('Attendance')
+    setQuickTopicSelection('')
     setShowValidation(false)
     setTutorialPhase('spotlight_generate')
     window.requestAnimationFrame(() => {
@@ -450,7 +536,6 @@ export default function CoachingApp() {
           triggerPostTutorialFeedbackNudge()
         }
         if (generationSuccessful && !isTutorialRun) {
-          setValueLineSeed((s) => s + 1)
           await refresh()
         }
       } catch (err) {
@@ -506,12 +591,11 @@ export default function CoachingApp() {
     }, 1800)
   }, [])
 
-  const applyQuickTopic = useCallback((topic: string) => {
-    const recognitionPrefix = 'Recognition:'
-    const isRecognition = topic.startsWith(recognitionPrefix)
-    const nextTopic = isRecognition ? topic.slice(recognitionPrefix.length).trim() : topic
-    setFormMode(isRecognition ? 'recognition' : 'coaching')
-    setInput((s) => ({ ...s, coachingReason: nextTopic }))
+  const applyQuickTopicById = useCallback((id: string) => {
+    const opt = COACHING_TOPIC_BY_ID[id]
+    if (!opt) return
+    setFormMode(opt.mode)
+    setInput(opt.input)
     setShowValidation(false)
   }, [])
 
@@ -519,17 +603,10 @@ export default function CoachingApp() {
     (value: string) => {
       setQuickTopicSelection(value)
       if (!value) return
-      applyQuickTopic(value)
+      applyQuickTopicById(value)
     },
-    [applyQuickTopic],
+    [applyQuickTopicById],
   )
-
-  const applyQuickCoachPreset = useCallback((preset: QuickCoachPreset) => {
-    setFormMode(preset.mode)
-    setInput(preset.input)
-    setQuickTopicSelection('')
-    setShowValidation(false)
-  }, [])
 
   const parsedSections = useMemo(() => (logText ? parseCoachingLogMarkdown(logText) : []), [logText])
 
@@ -550,8 +627,8 @@ export default function CoachingApp() {
         <p className="eyebrow">Trackora</p>
         <h1>Coaching form</h1>
         <p className="lede">
-          AI coaching built for retail wireless Team Leads — turn notes into clear, floor-ready coaching in
-          seconds.
+          <span className="lede-line">Generate structured, professional coaching in seconds.</span>
+          <span className="lede-line">Built for high-performing leaders.</span>
         </p>
       </header>
 
@@ -580,21 +657,26 @@ export default function CoachingApp() {
               <span className="plan-detail">{freeGenerationsRemainingLabel(profile)}</span>
             </div>
           )}
-          <div className="quick-coach" aria-label="Quick start presets">
-            <p className="quick-coach-label">Quick start</p>
-            <div className="quick-coach-row">
-              {QUICK_COACH_PRESETS.map((preset) => (
-                <button
-                  key={preset.label}
-                  type="button"
-                  className="quick-coach-btn"
-                  onClick={() => applyQuickCoachPreset(preset)}
-                >
-                  {preset.label}
-                </button>
+          <label className={'field' + (tutorialHighlightQuickTopics ? ' tutorial-field-highlight' : '')}>
+            <span className="label-text">Quick coaching topics</span>
+            <select
+              className={'field-control' + (tutorialHighlightQuickTopics ? ' is-tutorial-focus' : '')}
+              value={quickTopicSelection}
+              onChange={(e) => onQuickTopicChange(e.target.value)}
+              aria-label="Quick coaching topics"
+            >
+              <option value="">Select a quick topic...</option>
+              {COACHING_TOPIC_GROUPS.map((g) => (
+                <optgroup key={g.groupLabel} label={g.groupLabel}>
+                  {g.options.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
-            </div>
-          </div>
+            </select>
+          </label>
           <div className="mode-toggle" role="group" aria-label="Form type">
             <button
               type="button"
@@ -637,40 +719,16 @@ export default function CoachingApp() {
               rows={3}
             />
           </label>
-          <label className="field">
+          <label className="field field--notes-tight">
             <span className="label-text">Optional notes</span>
             <textarea
               className="field-control textarea"
               value={input.notes}
               onChange={(e) => setInput((s) => ({ ...s, notes: e.target.value }))}
               placeholder="Observations, context, numbers…"
-              rows={4}
+              rows={3}
             />
           </label>
-          <label className={'field' + (tutorialHighlightQuickTopics ? ' tutorial-field-highlight' : '')}>
-            <span className="label-text">Quick coaching topics</span>
-            <select
-              className={'field-control' + (tutorialHighlightQuickTopics ? ' is-tutorial-focus' : '')}
-              value={quickTopicSelection}
-              onChange={(e) => onQuickTopicChange(e.target.value)}
-            >
-              <option value="">Select a quick topic...</option>
-              {QUICK_TOPICS.map((topic) => (
-                <option key={topic} value={topic}>
-                  {topic}
-                </option>
-              ))}
-            </select>
-          </label>
-          {profile && isFreeLimitReached(profile) && tutorialPhase === 'off' && (
-            <div className="plan-limit-banner plan-limit-banner--secondary" role="note">
-              <p className="plan-limit-title">{FREE_LIMIT_HEADLINE}</p>
-              <p className="plan-limit-text plan-limit-text--compact">
-                Upgrade for unlimited coaching — better activations and faster floor feedback.
-              </p>
-              <UpgradeToProButton userId={profile.id} email={profile.email} />
-            </div>
-          )}
           <div
             className={
               'tutorial-generate-anchor' + (tutorialPhase === 'spotlight_generate' ? ' is-tutorial-step' : '')
@@ -701,6 +759,15 @@ export default function CoachingApp() {
             <p className="hint-error">Enter employee name and what the coaching form is for.</p>
           )}
           {generationError && <p className="hint-error">{generationError}</p>}
+          {profile && isFreeLimitReached(profile) && tutorialPhase === 'off' && (
+            <div className="plan-limit-banner plan-limit-banner--secondary" role="note">
+              <p className="plan-limit-title">{FREE_LIMIT_HEADLINE}</p>
+              <p className="plan-limit-text plan-limit-text--compact">
+                Upgrade for unlimited coaching — better activations and faster floor feedback.
+              </p>
+              <UpgradeToProButton userId={profile.id} email={profile.email} />
+            </div>
+          )}
         </section>
 
         <section
@@ -781,22 +848,17 @@ export default function CoachingApp() {
                   >
                     Regenerate
                   </button>
-                  <button
-                    type="button"
-                    className="btn-secondary btn-output-action"
-                    onClick={() => window.dispatchEvent(new CustomEvent('trackora-open-feedback'))}
-                  >
-                    Feedback
-                  </button>
                 </div>
               )}
-              {profile && tutorialPhase === 'off' && (
-                <p className="post-generation-time-saved">
-                  {pickRotatingLine(POST_GENERATION_VALUE_LINES, valueLineSeed)}
-                </p>
-              )}
               {tutorialPhase === 'off' && (
-                <div className="output-helpfulness" role="group" aria-label="Was this coaching output helpful">
+                <div
+                  className={
+                    'output-helpfulness' +
+                    (outputHelpfulness === 'yes' ? ' output-helpfulness--yes' : '')
+                  }
+                  role="group"
+                  aria-label="Was this coaching output helpful"
+                >
                   <p className="output-helpfulness-q">Was this accurate and helpful for your floor coaching?</p>
                   <div className="output-helpfulness-btns">
                     <button
@@ -824,6 +886,11 @@ export default function CoachingApp() {
                       No — send feedback
                     </button>
                   </div>
+                  {outputHelpfulness === 'yes' && (
+                    <p className="output-helpfulness-thanks" role="status" aria-live="polite">
+                      Thanks — glad this helped.
+                    </p>
+                  )}
                 </div>
               )}
             </div>
