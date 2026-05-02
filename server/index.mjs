@@ -25,10 +25,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const envFilePath = path.resolve(__dirname, '..', '.env')
 dotenv.config({ path: envFilePath, override: true })
 
-console.log('ENV PATH:', process.cwd())
-console.log('ENV FILE (resolved):', envFilePath)
-console.log('ENV FILE EXISTS:', fs.existsSync(envFilePath))
-console.log('OpenAI Key Loaded:', !!process.env.OPENAI_API_KEY)
+const debugLog = (...args) => {
+  if (process.env.NODE_ENV !== 'production') console.log(...args)
+}
+
+debugLog('ENV PATH:', process.cwd())
+debugLog('ENV FILE (resolved):', envFilePath)
+debugLog('ENV FILE EXISTS:', fs.existsSync(envFilePath))
+debugLog('OpenAI Key Loaded:', !!process.env.OPENAI_API_KEY)
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'
 
@@ -261,20 +265,67 @@ const SECTION_SHAPE = [
   '…',
 ].join('\n')
 
+/** Strict ordering for the model — placed first in the coaching system prompt. */
+const COACHING_PRIORITY =
+  'PRIORITY:\n' +
+  '1. Use only the provided input (coachingReason and notes—metrics and/or scenario).\n' +
+  '2. Apply APS / HPA / MPT definitions ONLY when those metrics appear in the input.\n' +
+  '3. Do not mix unrelated topics or domains.\n' +
+  '4. Keep content tight and realistic: aim for roughly 3–5 sentences of core manager substance across the whole form, within the required section titles below—no filler paragraphs.\n' +
+  '5. Avoid generic or corporate filler language; do not invent KPIs or numbers.\n\n'
+
 /** Corrective coaching — natural prose, anchored to user input; topic guide appended per request. */
+const RETAIL_WIRELESS_METRIC_DEFINITIONS =
+  'RETAIL WIRELESS METRICS — use EXACTLY these definitions whenever coachingReason or notes mention APS, HPA, MPT, or performance on the sales floor. Never substitute other industry meanings (e.g. do not treat APS as “accessories per sale” or anything not defined below).\n' +
+  '- APS (Attempts Per Shift): how many customers the rep gets to the tablet to check eligibility (AT&T, Verizon, T-Mobile). Low APS means the rep is not creating enough real attempts.\n' +
+  '- HPA (Hours Per Activation): how many hours pass between successful postpaid activations/sales. Lower HPA is better. High HPA means the rep is going too long between closed activations.\n' +
+  '- MPT (Minutes Per Transaction): the time between customer interactions/transactions. It does NOT mean how fast the rep completes one customer transaction. High MPT means too much downtime between customer opportunities.\n' +
+  'INTERPRETATION (only when the user’s input supports it; never invent numbers):\n' +
+  '- Low APS → not enough engagement / not enough genuine attempts to eligibility.\n' +
+  '- High HPA → too long between postpaid wins / not closing often enough.\n' +
+  '- High MPT → gaps between touches on the floor / not cycling to the next opportunity quickly enough.\n' +
+  'Only use APS, HPA, and MPT values that appear in the JSON. Never guess labels, goals, or KPIs.\n\n'
+
+const COACHING_SCENARIO_VS_METRICS =
+  'ROLE: You are a Team Lead coaching a Mobile Expert in a retail wireless store.\n' +
+  'The user may give performance metrics (APS, HPA, MPT), OR a behavioral scenario (lateness, poor engagement, misuse of keys, uniform, conduct, etc.), OR both—follow what is actually in coachingReason and notes.\n\n' +
+  'IF THE INPUT IS PRIMARILY METRICS (APS / HPA / MPT):\n' +
+  '- Use the metric definitions above exactly—never reinterpret those acronyms.\n' +
+  '- Tie on-floor behavior to business results: how effort and pacing connect to activations, store goals, earning opportunity, and avoiding long dead gaps between sales—using only what the input supports.\n\n' +
+  'IF THE INPUT IS PRIMARILY A SCENARIO (not a metrics story):\n' +
+  '- Address the behavior directly. Firm but professional.\n' +
+  '- Explain why it matters (team, customers, safety, standards—whatever fits the scenario).\n' +
+  '- Give a clear expectation moving forward.\n\n' +
+  'ALWAYS: Follow PRIORITY at the top of this message. Sound like a real manager—direct and actionable.\n\n'
+
+const COACHING_BUSINESS_OUTCOMES =
+  'BUSINESS OUTCOMES — when coachingReason/notes are about selling or floor performance (metrics like APS/HPA/MPT, goals, activations, accessories, conversion, customer engagement for sales, or similar):\n' +
+  '- Make Impact explicit: explain how the current behavior hurts team results—e.g. missed shots at postpaid activations, falling short of store goals, weaker commission opportunity, or too much idle time between customer touches/sales opportunities.\n' +
+  '- Connect the fix to outcomes: clearer path to more activations, tighter rhythm on the floor (fewer long gaps between sales conversations), stronger alignment with store targets, and protecting what they earn—without inventing dollar amounts, quotas, or rankings not in the input.\n' +
+  '- Use plain Team Lead language (not buzzwords): line of sight from behavior → opportunities → closes → contribution to the board.\n\n' +
+  'When the topic is NOT about selling or performance (e.g. keys/security or attendance with no sales angle in the user text), keep Impact in that lane—safety, standards, coverage, trust—do not force sales outcomes.\n\n'
+
+const COACHING_STRUCTURE_AND_TONE =
+  'COACHING QUALITY:\n' +
+  '- Retail wireless Team Lead → Mobile Expert on the floor: direct, real, slightly motivational but not corny.\n' +
+  '- Every section ties to coachingReason and notes. Situation + Behavior = problem; Impact = why it matters (and sales outcomes when the topic fits); Next Steps = specific floor actions.\n' +
+  '- Avoid corporate filler and invented KPIs (see PRIORITY).\n\n' +
+  'EXAMPLE TONE (structure only—do not copy if it does not match the user’s topic):\n' +
+  '"Your APS is low, which means you’re not getting enough customers to the tablet. That tells me opportunities are walking by without an eligibility check. Today, focus on stopping every customer in your area and getting them to eligibility before they leave electronics."\n\n'
+
 const COACHING_PROMPT =
-  'You are an experienced team lead writing a CORRECTIVE COACHING form (mode coaching only).\n\n' +
-  'VOICE:\n' +
-  '- Write like a real manager speaking to the employee: professional, direct, slightly conversational.\n' +
-  '- Prefer first-person framing where it fits (e.g., "I want to discuss...", "I expect...", "We need to see...").\n' +
-  '- Avoid robotic language and generic evaluation phrases.\n\n' +
-  'STAY ON TOPIC:\n' +
-  '- Anchor everything to coachingReason and notes from the JSON. You may rephrase and polish so it reads professional and natural—like a real manager, not a stiff template.\n' +
-  '- You may add closely related workplace context (expectations, standards, accountability, why it matters) as long as it clearly belongs to the SAME topic the user entered.\n' +
-  '- Do not invent a different problem. Do not bring in customers, incidents, numbers, dates, or details the user did not imply.\n' +
-  '- Do not mention sales, goals, metrics, offers, accessories, customer engagement, or closing unless the input is actually about sales or performance.\n' +
-  '- Do not mention attendance, punctuality, breaks, or schedule unless the input is about attendance.\n' +
-  '- Do not mention keys, vault, safe handling, security, or policy compliance unless the input is about security or policy.\n\n' +
+  COACHING_PRIORITY +
+  'You are an experienced retail wireless Team Lead writing a CORRECTIVE COACHING form (mode coaching only).\n' +
+  'Default context when it fits the user’s topic: phones, plans, postpaid activations, eligibility checks on the tablet, accessories, store traffic, Mobile Experts on the sales floor — use only what the user’s words imply; never invent KPIs or incidents.\n\n' +
+  RETAIL_WIRELESS_METRIC_DEFINITIONS +
+  COACHING_SCENARIO_VS_METRICS +
+  COACHING_BUSINESS_OUTCOMES +
+  COACHING_STRUCTURE_AND_TONE +
+  'VOICE & STAY ON TOPIC:\n' +
+  '- Professional, direct, slightly conversational; first-person where it fits ("I expect...", "We need to see...").\n' +
+  '- Anchor to coachingReason and notes; polish like a real manager. Add only closely related context for the SAME topic.\n' +
+  '- Do not invent problems, customers, incidents, numbers, or details not implied by the user.\n' +
+  '- Sales/metrics/engagement/closing only if the input is about sales or performance; attendance only if about attendance; keys/security only if about security or policy.\n\n' +
   'TOPIC_HINT in the system message is only to nudge Coaching Category and tone—it is not extra content to paste. Every section must still reflect the user’s actual words.\n\n' +
   'EXAMPLES (boundaries—not wording to copy):\n' +
   '- Input: "Left keys unattended" → You may expand into key control, security expectations, accountability, and following procedure. Do NOT add goals, sales, missed sales, customer engagement, or store performance.\n' +
@@ -296,7 +347,7 @@ const COACHING_PROMPT =
   '- "below expectations"\n' +
   '- "focus on improvement"\n' +
   'Use explicit language instead: what happened, expected standard, required change.\n\n' +
-  'AVOID stiff corporate phrasing ("leverage," "moving forward," "align on expectations," long essay tone). Sound direct and human.\n\n' +
+  'Also avoid stiff corporate phrasing ("leverage," "moving forward," "align on expectations").\n\n' +
   'SENTENCES: Title-case employeeName from JSON; bullet lines start with a capital letter. Complete sentences only.\n\n' +
   'SECTIONS — exact titles, this order. Nothing before "Pre-Coaching Notes:":\n' +
   'Pre-Coaching Notes:\n' +
@@ -311,7 +362,7 @@ const COACHING_PROMPT =
   'Coaching Category: One natural line aligned with the topic they raised.\n' +
   'Situation: State what happened in plain manager language, tied to the input.\n' +
   'Behavior: State the observed behavior and the expected behavior/standard.\n' +
-  'Impact: Explain concrete impact tied to the same issue (no unrelated domains).\n' +
+  'Impact: Explain concrete impact tied to the same issue (no unrelated domains). For sales/performance topics, spell out how this affects activations, goals, earning opportunity, or idle gaps between sales—when justified by the input.\n' +
   'Next Steps: Practical, actionable bullets tied directly to the issue and expectation.\n' +
   'Manager Follow-Up: Include timing and a direct expectation statement ("I expect...").\n\n' +
   'Layout example:\n' +
@@ -321,7 +372,12 @@ const COACHING_PROMPT =
  * Recognition-only system prompt. Zero overlap with COACHING_PROMPT — different role, rules, and vocabulary.
  */
 const RECOGNITION_PROMPT =
-  'You are writing a RECOGNITION form only (mode recognition). This is NOT coaching.\n\n' +
+  'PRIORITY:\n' +
+  '1. Use only coachingReason and notes.\n' +
+  '2. Do not invent praise, numbers, or scenarios.\n' +
+  '3. Stay positive and specific—no generic fluff.\n\n' +
+  'You are a retail wireless Team Lead writing a RECOGNITION form only (mode recognition). This is NOT coaching.\n' +
+  'Use store-appropriate language only when the user’s input clearly fits; never invent sales numbers or customer stories.\n\n' +
   'GROUNDING:\n' +
   '- Praise only what appears in coachingReason and notes. Do not invent customers, numbers, rankings, or scenarios.\n' +
   '- Do not mention sales, goals, metrics, engagement, closing, or offers unless the user explicitly wrote those topics—then you may reflect their words only.\n' +
@@ -345,10 +401,13 @@ const RECOGNITION_PROMPT =
   SECTION_SHAPE
 
 const COACHING_USER_PREFIX =
-  'TASK: Write the full coaching form. Sound natural and polished, but stay on the issue in coachingReason/notes.\n' +
-  'Use ISSUE_TOPIC_HINT and the TOPIC GUIDE in the system message for category/tone only—do not drift into unrelated themes.\n' +
-  'If numbers exist in the JSON, mention actual vs expected clearly; never invent KPIs.\n' +
-  'Include clear accountability language: what happened, what was expected, and what needs to change.\n\n'
+  'TASK: Write the full coaching form. Stay anchored to coachingReason and notes; polished but not generic.\n' +
+  'Decide whether the user is focused on metrics (APS/HPA/MPT) or a behavioral scenario (or both), and follow the matching rules in the system message.\n' +
+  'If the topic is about floor performance or selling, connect behavior to outcomes (goals, activations, commission opportunity, gaps between sales) as described under BUSINESS OUTCOMES—without inventing numbers.\n' +
+  'If the JSON references APS, HPA, or MPT, use ONLY the retail wireless metric definitions from the system message—do not guess what those letters mean.\n' +
+  'Use ISSUE_TOPIC_HINT and the TOPIC GUIDE for category/tone only—do not drift into unrelated themes.\n' +
+  'If numbers exist in the JSON, reference them faithfully; never invent goals or extra KPIs.\n' +
+  'Problem / why it matters / floor actions must come through in Situation, Impact, and Next Steps as described in the system message. Keep it short and manager-real.\n\n'
 
 const RECOGNITION_USER_PREFIX =
   'TASK: Recognition form only. 100% positive reinforcement. You are NOT writing coaching.\n' +
@@ -645,9 +704,10 @@ async function getProfileForUser(userId) {
 }
 
 function usageEnvelope(profile) {
-  const usageCount = Math.max(0, Number(profile?.usage_count || 0))
+  const raw = Number(profile?.usage_count ?? 0)
+  const usageCount = Number.isFinite(raw) ? Math.trunc(raw) : 0
   const isPro = Boolean(profile?.is_pro)
-  const remaining = isPro ? Number.POSITIVE_INFINITY : Math.max(0, FREE_LIMIT - usageCount)
+  const remaining = isPro ? Number.POSITIVE_INFINITY : FREE_LIMIT - usageCount
   return { usageCount, isPro, remaining, freeLimit: FREE_LIMIT }
 }
 
@@ -661,7 +721,7 @@ async function recordServerSideGenerationUsage(userId) {
   const profile = profileResult.profile
   if (profile.is_pro) {
     const snapshot = usageEnvelope(profile)
-    console.log('SERVER_USAGE_APPLY', {
+    debugLog('SERVER_USAGE_APPLY', {
       userId,
       isPro: true,
       usageCountBefore: snapshot.usageCount,
@@ -671,7 +731,8 @@ async function recordServerSideGenerationUsage(userId) {
     })
     return profile
   }
-  const usageBefore = Math.max(0, Number(profile.usage_count || 0))
+  const rawBefore = Number(profile.usage_count ?? 0)
+  const usageBefore = Number.isFinite(rawBefore) ? Math.trunc(rawBefore) : 0
   const { data: updatedRow, error } = await supabaseAdmin
     .from('profiles')
     .update({ usage_count: usageBefore + 1 })
@@ -682,9 +743,10 @@ async function recordServerSideGenerationUsage(userId) {
     console.error('SERVER_USAGE_UPDATE_ERROR', { userId, error: error.message })
     return null
   }
-  const usageAfter = Math.max(0, Number(updatedRow?.usage_count || 0))
-  const remaining = Math.max(0, FREE_LIMIT - usageAfter)
-  console.log('SERVER_USAGE_APPLY', {
+  const rawAfter = Number(updatedRow?.usage_count ?? 0)
+  const usageAfter = Number.isFinite(rawAfter) ? Math.trunc(rawAfter) : 0
+  const remaining = FREE_LIMIT - usageAfter
+  debugLog('SERVER_USAGE_APPLY', {
     userId,
     isPro: false,
     usageCountBefore: usageBefore,
@@ -886,7 +948,7 @@ app.post('/api/create-customer-portal-session', handleCreateCustomerPortalSessio
 app.post('/create-billing-portal-session', handleCreateCustomerPortalSession)
 
 app.post('/api/ai', async (req, res) => {
-  console.log('SERVER_API_AI_HIT')
+  debugLog('SERVER_API_AI_HIT')
   const authHeader = req.headers.authorization
   if (!authHeader || typeof authHeader !== 'string') {
     return res.status(401).json({ ok: false, error: 'Unauthorized' })
@@ -902,20 +964,20 @@ app.post('/api/ai', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'Expected { action, payload }.' })
   }
 
-  console.log('SERVER_API_AI_AUTH_HEADER_EXISTS', Boolean(req.headers.authorization))
+  debugLog('SERVER_API_AI_AUTH_HEADER_EXISTS', Boolean(req.headers.authorization))
   const auth = await getAuthenticatedUserId(req)
   if (auth.error || !auth.userId) {
     return res.status(401).json({ ok: false, error: auth.error || 'Unauthorized.' })
   }
   authUserId = auth.userId
   authUserEmail = auth.email
-  console.log('SERVER_API_AI_USER', { userId: authUserId, email: authUserEmail })
+  debugLog('SERVER_API_AI_USER', { userId: authUserId, email: authUserEmail })
 
   if (action === 'coaching_log') {
     isTutorialRun = payload?.isTutorialRun === true
     payload = sanitizeCoachingPayload(payload)
     if (isTutorialRun) {
-      console.log('[api/ai] coaching_log isTutorialRun (omit from usage; not passed to model)')
+      debugLog('[api/ai] coaching_log isTutorialRun (omit from usage; not passed to model)')
     }
     const profileResult = await getProfileForUser(authUserId)
     if (!profileResult.profile || profileResult.error) {
@@ -924,7 +986,7 @@ app.post('/api/ai', async (req, res) => {
     const profile = profileResult.profile
     usageSnapshot = usageEnvelope(profile)
     const shouldBlock = !profile.is_pro && usageSnapshot.usageCount >= FREE_LIMIT
-    console.log('SERVER_API_AI_USAGE_CHECK', {
+    debugLog('SERVER_API_AI_USAGE_CHECK', {
       userId: authUserId,
       isPro: usageSnapshot.isPro,
       usageCountBefore: usageSnapshot.usageCount,
@@ -959,7 +1021,7 @@ app.post('/api/ai', async (req, res) => {
     if (action === 'coaching_log') {
       const raw = buildDeterministicCoachingForm(payloadForAi)
       const text = polishGeneratedCoachingForm(raw, rawName)
-      console.log('[api/ai] coaching_log response', {
+      debugLog('[api/ai] coaching_log response', {
         source: 'deterministic',
         usedOpenAI: false,
         reason: 'no_openai_key',
@@ -1007,7 +1069,7 @@ app.post('/api/ai', async (req, res) => {
         ])
         text = polishGeneratedCoachingForm(raw, rawName)
       }
-      console.log('[api/ai] coaching_log response', {
+      debugLog('[api/ai] coaching_log response', {
         source: 'openai',
         usedOpenAI: true,
         mode: payloadForAi?.mode,
@@ -1032,7 +1094,7 @@ app.post('/api/ai', async (req, res) => {
     const text =
       action === 'coaching_log' ? polishGeneratedCoachingForm(raw, rawName) : raw
     if (action === 'coaching_log') {
-      console.log('[api/ai] coaching_log response', {
+      debugLog('[api/ai] coaching_log response', {
         source: 'openai',
         usedOpenAI: true,
         mode: payloadForAi?.mode,
@@ -1061,7 +1123,7 @@ app.post('/api/ai', async (req, res) => {
     if (action === 'coaching_log') {
       const raw = buildDeterministicCoachingForm(payloadForAi)
       const text = polishGeneratedCoachingForm(raw, rawName)
-      console.log('[api/ai] coaching_log response', {
+      debugLog('[api/ai] coaching_log response', {
         source: 'deterministic',
         usedOpenAI: false,
         reason: 'openai_error',

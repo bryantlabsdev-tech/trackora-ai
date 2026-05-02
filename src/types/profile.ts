@@ -20,7 +20,7 @@ export type ProfileRow = {
 
 export type Profile = ProfileRow
 
-/** Max AI generations for free tier (OpenAI success only). */
+/** Max AI generations for free tier (must match server default `FREE_LIMIT`, unless you change both). */
 export const FREE_AI_GENERATION_LIMIT = 3
 
 export function canUseAiGeneration(profile: Profile | null): boolean {

@@ -8,6 +8,7 @@
     "preview": "vite preview",
     "start": "node server/index.mjs",
     "test": "node --test shared/**/*.test.mjs",
+    "feedback:list": "node scripts/list-feedback.mjs",
     "cap:sync": "npm run build && env LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 npx cap sync",
     "cap:open:android": "npx cap open android",
     "cap:open:ios": "npx cap open ios",

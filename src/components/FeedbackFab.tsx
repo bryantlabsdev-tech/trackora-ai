@@ -41,6 +41,22 @@ export default function FeedbackFab({ client, userId, userEmail }: FeedbackFabPr
   }, [open, close])
 
   useEffect(() => {
+    const onOpenFeedback = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ presetMessage?: string }>).detail
+      if (typeof detail?.presetMessage === 'string') {
+        setMessage(detail.presetMessage)
+      } else {
+        setMessage('')
+      }
+      setPhase('form')
+      setError(null)
+      setOpen(true)
+    }
+    window.addEventListener('trackora-open-feedback', onOpenFeedback as EventListener)
+    return () => window.removeEventListener('trackora-open-feedback', onOpenFeedback as EventListener)
+  }, [])
+
+  useEffect(() => {
     if (phase !== 'thanks' || !open) return
     const id = window.setTimeout(() => close(), 1800)
     return () => window.clearTimeout(id)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FreeLimitReachedError, requestCoachingLog } from './api/requestCoachingLog'
+import { CoachingApiError, FreeLimitReachedError, requestCoachingLog } from './api/requestCoachingLog'
 import { useProfile } from './context/ProfileContext'
 import { usePostTutorialFeedbackNudge } from './context/PostTutorialFeedbackNudgeContext'
 import type { CoachingLogApiPayload, FormMode, SimpleCoachingInput } from './types/coaching'
@@ -29,7 +29,9 @@ function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
 
   async function startCheckout() {
     const trimmedUserId = userId.trim()
-    console.log('[upgrade] checkout userId present:', Boolean(trimmedUserId))
+    if (import.meta.env.DEV) {
+      console.log('[upgrade] checkout userId present:', Boolean(trimmedUserId))
+    }
 
     if (!trimmedUserId) {
       setCheckoutError('Could not start checkout: missing user id. Please sign in again.')
@@ -44,7 +46,6 @@ function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
         email: email.trim(),
       }
 
-      console.log('Calling backend checkout...')
       const res = await fetch(getCreateCheckoutSessionUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -59,7 +60,6 @@ function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
         setCheckoutError('No checkout URL returned.')
         return
       }
-      console.log('Redirecting to Stripe...')
       window.location.href = data.url
     } catch {
       setCheckoutError('Network error. Try again.')
@@ -91,6 +91,23 @@ function UpgradeToProButton({ userId, email }: UpgradeToProButtonProps) {
 const SESSION_WARMUP_TIP_KEY = 'trackora_warmup_tip_shown'
 const SESSION_PAYWALL_SHOWN_KEY = 'trackora_paywall_shown_this_session'
 
+/** Single standard headline wherever the free tier is exhausted (paywall, banners). */
+const FREE_LIMIT_HEADLINE = "You've used all 3 free coaching generations."
+
+/** Rotate value messaging so we do not repeat one line everywhere. */
+const POST_GENERATION_VALUE_LINES = [
+  'Build stronger coaching in less time.',
+  'Turn messy performance notes into clear coaching.',
+  'Coach faster without sounding generic.',
+  'Give your team better direction before the shift is over.',
+] as const
+
+function pickRotatingLine(lines: readonly string[], seed: number): string {
+  if (lines.length === 0) return ''
+  const i = Math.abs(Math.trunc(seed)) % lines.length
+  return lines[i]!
+}
+
 const TUTORIAL_SAMPLE: SimpleCoachingInput = {
   employeeName: 'Alex Rivera',
   coachingReason: 'Late to opening shift twice this week',
@@ -99,28 +116,35 @@ const TUTORIAL_SAMPLE: SimpleCoachingInput = {
 
 type TutorialPhase = 'off' | 'walkthrough' | 'spotlight_generate' | 'spotlight_output'
 
-const TUTORIAL_STEPS = [
+type TutorialStep = { title: string; body: string; support?: string }
+
+const TUTORIAL_STEPS: TutorialStep[] = [
   {
-    title: 'Generate coaching forms in seconds',
-    body: 'Fill in the employee name and what the coaching is for. Use the quick topic dropdown to get started instantly.',
+    title: 'Write professional coaching forms in seconds',
+    body: 'Enter the employee name and what the coaching is for to get started.',
   },
   {
-    title: 'Use quick topics to move faster',
-    body: 'Select a quick coaching topic from the dropdown to autofill your form. You can still customize everything.',
+    title: 'Move faster with quick topics',
+    body: 'Select a quick topic from the dropdown to instantly fill your coaching form. You can still customize everything.',
   },
   {
-    title: 'AI does the heavy lifting',
-    body: "Click 'Generate AI Coaching Form' and get a structured coaching form instantly.",
+    title: 'Get a complete coaching form instantly',
+    body: "Click 'Generate AI Coaching Form' and receive a structured, ready-to-use coaching form.",
   },
   {
     title: 'Try it free',
-    body: 'You get 3 free AI coaching forms to test it out.',
+    body: 'Generate 3 coaching forms at no cost — no commitment required.',
   },
   {
-    title: "Upgrade when you're ready",
-    body: 'Upgrade to Pro to generate unlimited coaching forms and save hours every week.',
+    title: 'Help us improve',
+    body: 'If anything feels confusing or missing, use the feedback button to let us know. Your input helps us improve the app.',
+    support: 'We read every message.',
   },
-] as const
+  {
+    title: 'Keep generating without limits',
+    body: 'Upgrade for unlimited coaching forms while your team is still on the sales floor.',
+  },
+]
 
 const QUICK_TOPICS = [
   'Low accessory sales',
@@ -133,6 +157,79 @@ const QUICK_TOPICS = [
   'Keys',
   'Uniform',
 ] as const
+
+type QuickCoachPreset = {
+  label: string
+  mode: FormMode
+  input: SimpleCoachingInput
+}
+
+/** One-tap starters above the form — sets mode, fills fields; user can edit before Generate. */
+const QUICK_COACH_PRESETS: QuickCoachPreset[] = [
+  {
+    label: 'Late to shift',
+    mode: 'coaching',
+    input: {
+      employeeName: 'Mobile Expert',
+      coachingReason: 'Late to shift',
+      notes: 'Discuss punctuality and on-time arrival.',
+    },
+  },
+  {
+    label: 'Low APS',
+    mode: 'coaching',
+    input: {
+      employeeName: 'Mobile Expert',
+      coachingReason: 'Low APS (Attempts Per Shift)',
+      notes: 'Add current APS and goal if known. Focus on getting customers to the tablet for eligibility.',
+    },
+  },
+  {
+    label: 'High HPA',
+    mode: 'coaching',
+    input: {
+      employeeName: 'Mobile Expert',
+      coachingReason: 'High HPA (Hours Per Activation)',
+      notes: 'Add numbers if known. High HPA = too long between postpaid activations.',
+    },
+  },
+  {
+    label: 'High MPT',
+    mode: 'coaching',
+    input: {
+      employeeName: 'Mobile Expert',
+      coachingReason: 'High MPT (Minutes Per Transaction)',
+      notes: 'Add context if known. High MPT = too much gap between customer interactions.',
+    },
+  },
+  {
+    label: 'Not engaging customers',
+    mode: 'coaching',
+    input: {
+      employeeName: 'Mobile Expert',
+      coachingReason: 'Not engaging customers on the sales floor',
+      notes: 'Describe what you observed (approach, acknowledgment, handoffs).',
+    },
+  },
+  {
+    label: 'Misuse of keys',
+    mode: 'coaching',
+    input: {
+      employeeName: 'Mobile Expert',
+      coachingReason: 'Misuse of keys / key control',
+      notes: 'Brief facts: what happened and policy expectation.',
+    },
+  },
+  {
+    label: 'Recognition',
+    mode: 'recognition',
+    input: {
+      employeeName: 'Mobile Expert',
+      coachingReason: 'Strong performance — recognition',
+      notes: 'What went well today (sales floor, customer experience, activations, etc.).',
+    },
+  },
+]
 
 function emptyInput(): SimpleCoachingInput {
   return { employeeName: '', coachingReason: '', notes: '' }
@@ -168,6 +265,9 @@ export default function CoachingApp() {
   const tutorialPhaseRef = useRef<TutorialPhase>('off')
   const generateBtnRef = useRef<HTMLButtonElement>(null)
   const outputCardRef = useRef<HTMLElement>(null)
+  /** Rotates post-output value one-liners without triggering extra renders during generation. */
+  const [valueLineSeed, setValueLineSeed] = useState(0)
+  const [outputHelpfulness, setOutputHelpfulness] = useState<'yes' | 'no' | null>(null)
 
   useEffect(() => {
     tutorialPhaseRef.current = tutorialPhase
@@ -251,34 +351,110 @@ export default function CoachingApp() {
     }
   }, [input, formMode])
 
-  const generate = useCallback(async () => {
-    if (!canGenerate) {
-      setShowValidation(true)
-      return
-    }
-    const blocked =
-      profileLoading ||
-      !profile ||
-      (tutorialPhaseRef.current !== 'spotlight_generate' && !canUseAiGeneration(profile))
-    const usageCount = profile?.usage_count ?? null
-    const isPro = profile?.is_pro ?? null
-    const remainingForLog =
-      profile && !profile.is_pro ? freeGenerationsRemaining(profile) : Number.POSITIVE_INFINITY
-    console.log('[usage] is_pro:', isPro)
-    console.log('[usage] current free usage count:', usageCount)
-    console.log('[usage] remaining generations:', remainingForLog)
-    console.log('[usage] generation blocked:', blocked)
+  type RunGenOpts = { isTutorialRun?: boolean; skipWarmup?: boolean }
 
-    if (blocked) {
-      if (tutorialPhaseRef.current === 'off' && profile && !profile.is_pro && isFreeLimitReached(profile)) {
-        let alreadyShown = false
-        try {
-          alreadyShown =
-            typeof sessionStorage !== 'undefined' && sessionStorage.getItem(SESSION_PAYWALL_SHOWN_KEY) === '1'
-        } catch {
-          alreadyShown = false
+  const runGeneration = useCallback(
+    async (opts?: RunGenOpts) => {
+      if (!canGenerate) {
+        setShowValidation(true)
+        return
+      }
+      const isTutorialRun =
+        opts?.isTutorialRun !== undefined
+          ? opts.isTutorialRun
+          : tutorialPhaseRef.current === 'spotlight_generate'
+      const skipWarmup = opts?.skipWarmup === true
+
+      const blocked =
+        profileLoading ||
+        !profile ||
+        (!isTutorialRun && !canUseAiGeneration(profile))
+      const usageCount = profile?.usage_count ?? null
+      const isPro = profile?.is_pro ?? null
+      const remainingForLog =
+        profile && !profile.is_pro ? freeGenerationsRemaining(profile) : Number.POSITIVE_INFINITY
+      if (import.meta.env.DEV) {
+        console.log('[usage]', { isPro, usageCount, remainingForLog, blocked, isTutorialRun })
+      }
+
+      if (blocked) {
+        if (tutorialPhaseRef.current === 'off' && profile && !profile.is_pro && isFreeLimitReached(profile)) {
+          let alreadyShown = false
+          try {
+            alreadyShown =
+              typeof sessionStorage !== 'undefined' && sessionStorage.getItem(SESSION_PAYWALL_SHOWN_KEY) === '1'
+          } catch {
+            alreadyShown = false
+          }
+          if (!alreadyShown) {
+            setShowLimitPaywall(true)
+            try {
+              if (typeof sessionStorage !== 'undefined') {
+                sessionStorage.setItem(SESSION_PAYWALL_SHOWN_KEY, '1')
+              }
+            } catch {
+              // ignore storage errors
+            }
+          }
         }
-        if (!alreadyShown) {
+        return
+      }
+      setShowValidation(false)
+      setGenerationError(null)
+      setOutputHelpfulness(null)
+
+      let shouldShowWarmupTip = false
+      if (!skipWarmup) {
+        try {
+          if (typeof sessionStorage !== 'undefined') {
+            if (!sessionStorage.getItem(SESSION_WARMUP_TIP_KEY)) {
+              sessionStorage.setItem(SESSION_WARMUP_TIP_KEY, '1')
+              shouldShowWarmupTip = true
+            }
+          } else if (!warmupFallbackUsedRef.current) {
+            warmupFallbackUsedRef.current = true
+            shouldShowWarmupTip = true
+          }
+        } catch {
+          if (!warmupFallbackUsedRef.current) {
+            warmupFallbackUsedRef.current = true
+            shouldShowWarmupTip = true
+          }
+        }
+        if (shouldShowWarmupTip) setShowWarmupNotice(true)
+      }
+
+      setLoading(true)
+      const startedAt = Date.now()
+      setLogText(null)
+      setLogSource(null)
+      setLastGenerationMs(null)
+      setCopiedSectionKeys({})
+      try {
+        const result = await requestCoachingLog(payload, { isTutorialRun })
+        setLogText(result.text)
+        setLogSource(result.source)
+        setLastGenerationMs(Date.now() - startedAt)
+        if (result.usage && !isTutorialRun) {
+          applyUsageSnapshot({
+            usageCount: result.usage.usageCount,
+            isPro: result.usage.isPro,
+          })
+        }
+
+        const generationSuccessful = typeof result.text === 'string' && result.text.trim().length > 0
+        if (generationSuccessful && tutorialPhaseRef.current === 'spotlight_generate') {
+          const ok = await completeTutorial()
+          if (!ok) console.error('[tutorial] could not persist tutorial completion / bonus')
+          setTutorialPhase('spotlight_output')
+          triggerPostTutorialFeedbackNudge()
+        }
+        if (generationSuccessful && !isTutorialRun) {
+          setValueLineSeed((s) => s + 1)
+          await refresh()
+        }
+      } catch (err) {
+        if (err instanceof FreeLimitReachedError) {
           setShowLimitPaywall(true)
           try {
             if (typeof sessionStorage !== 'undefined') {
@@ -287,98 +463,35 @@ export default function CoachingApp() {
           } catch {
             // ignore storage errors
           }
+          return
         }
-      }
-      return
-    }
-    setShowValidation(false)
-    setGenerationError(null)
-
-    let shouldShowWarmupTip = false
-    try {
-      if (typeof sessionStorage !== 'undefined') {
-        if (!sessionStorage.getItem(SESSION_WARMUP_TIP_KEY)) {
-          sessionStorage.setItem(SESSION_WARMUP_TIP_KEY, '1')
-          shouldShowWarmupTip = true
+        if (err instanceof CoachingApiError) {
+          setGenerationError(err.message || 'Could not generate right now. Please try again.')
+          return
         }
-      } else if (!warmupFallbackUsedRef.current) {
-        warmupFallbackUsedRef.current = true
-        shouldShowWarmupTip = true
+        setGenerationError('Could not generate right now. Please try again.')
+      } finally {
+        setLoading(false)
+        setShowWarmupNotice(false)
       }
-    } catch {
-      if (!warmupFallbackUsedRef.current) {
-        warmupFallbackUsedRef.current = true
-        shouldShowWarmupTip = true
-      }
-    }
-    if (shouldShowWarmupTip) setShowWarmupNotice(true)
+    },
+    [
+      canGenerate,
+      payload,
+      profile,
+      profileLoading,
+      applyUsageSnapshot,
+      completeTutorial,
+      refresh,
+      triggerPostTutorialFeedbackNudge,
+    ],
+  )
 
-    const isTutorialRun = tutorialPhaseRef.current === 'spotlight_generate'
+  const generate = useCallback(() => void runGeneration(), [runGeneration])
 
-    setLoading(true)
-    const startedAt = Date.now()
-    setLogText(null)
-    setLogSource(null)
-    setLastGenerationMs(null)
-    setCopiedSectionKeys({})
-    try {
-      const result = await requestCoachingLog(payload, { isTutorialRun })
-      setLogText(result.text)
-      setLogSource(result.source)
-      setLastGenerationMs(Date.now() - startedAt)
-      if (result.usage && !isTutorialRun) {
-        applyUsageSnapshot({
-          usageCount: result.usage.usageCount,
-          isPro: result.usage.isPro,
-        })
-      }
-
-      const generationSuccessful = typeof result.text === 'string' && result.text.trim().length > 0
-      if (generationSuccessful && tutorialPhaseRef.current === 'spotlight_generate') {
-        const ok = await completeTutorial()
-        if (!ok) console.error('[tutorial] could not persist tutorial completion / bonus')
-        setTutorialPhase('spotlight_output')
-        triggerPostTutorialFeedbackNudge()
-      }
-      const shouldIncrementUsage =
-        !isTutorialRun &&
-        generationSuccessful &&
-        result.source === 'openai' &&
-        Boolean(profile && !profile.is_pro)
-      console.log('[usage] result.source:', result.source)
-      console.log('[usage] generation successful:', generationSuccessful)
-      console.log('[usage] incrementing usage (OpenAI only):', shouldIncrementUsage)
-
-      if (generationSuccessful && !isTutorialRun) {
-        await refresh()
-      }
-    } catch (err) {
-      if (err instanceof FreeLimitReachedError) {
-        setShowLimitPaywall(true)
-        try {
-          if (typeof sessionStorage !== 'undefined') {
-            sessionStorage.setItem(SESSION_PAYWALL_SHOWN_KEY, '1')
-          }
-        } catch {
-          // ignore storage errors
-        }
-        return
-      }
-      setGenerationError('Could not generate right now. Please try again.')
-    } finally {
-      setLoading(false)
-      setShowWarmupNotice(false)
-    }
-  }, [
-    canGenerate,
-    payload,
-    profile,
-    profileLoading,
-    applyUsageSnapshot,
-    completeTutorial,
-    refresh,
-    triggerPostTutorialFeedbackNudge,
-  ])
+  const regenerate = useCallback(() => {
+    void runGeneration({ isTutorialRun: false, skipWarmup: true })
+  }, [runGeneration])
 
   const copySection = useCallback(async (rowKey: string, sectionLabel: string, body: string) => {
     const plain = formatSectionClipboardBlock(sectionLabel, body)
@@ -411,6 +524,13 @@ export default function CoachingApp() {
     [applyQuickTopic],
   )
 
+  const applyQuickCoachPreset = useCallback((preset: QuickCoachPreset) => {
+    setFormMode(preset.mode)
+    setInput(preset.input)
+    setQuickTopicSelection('')
+    setShowValidation(false)
+  }, [])
+
   const parsedSections = useMemo(() => (logText ? parseCoachingLogMarkdown(logText) : []), [logText])
 
   const invalidName = showValidation && !input.employeeName.trim()
@@ -430,8 +550,8 @@ export default function CoachingApp() {
         <p className="eyebrow">Trackora</p>
         <h1>Coaching form</h1>
         <p className="lede">
-          Generate structured, professional coaching forms in seconds using AI. Built for high-performing
-          leaders.
+          AI coaching built for retail wireless Team Leads — turn notes into clear, floor-ready coaching in
+          seconds.
         </p>
       </header>
 
@@ -460,6 +580,21 @@ export default function CoachingApp() {
               <span className="plan-detail">{freeGenerationsRemainingLabel(profile)}</span>
             </div>
           )}
+          <div className="quick-coach" aria-label="Quick start presets">
+            <p className="quick-coach-label">Quick start</p>
+            <div className="quick-coach-row">
+              {QUICK_COACH_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  className="quick-coach-btn"
+                  onClick={() => applyQuickCoachPreset(preset)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="mode-toggle" role="group" aria-label="Form type">
             <button
               type="button"
@@ -498,7 +633,7 @@ export default function CoachingApp() {
               className={'field-control textarea' + (invalidReason ? ' is-invalid' : '')}
               value={input.coachingReason}
               onChange={(e) => setInput((s) => ({ ...s, coachingReason: e.target.value }))}
-              placeholder="e.g. Low APS and low accessory sales"
+              placeholder="e.g. Low APS, high HPA — add numbers in notes"
               rows={3}
             />
           </label>
@@ -528,14 +663,12 @@ export default function CoachingApp() {
             </select>
           </label>
           {profile && isFreeLimitReached(profile) && tutorialPhase === 'off' && (
-            <div className="plan-limit-banner">
-              <p className="plan-limit-title">You&apos;ve used your 3 free AI coaching forms</p>
-              <p className="plan-limit-text">
-                Upgrade to Pro to generate unlimited coaching forms in seconds and save hours of manual work.
+            <div className="plan-limit-banner plan-limit-banner--secondary" role="note">
+              <p className="plan-limit-title">{FREE_LIMIT_HEADLINE}</p>
+              <p className="plan-limit-text plan-limit-text--compact">
+                Upgrade for unlimited coaching — better activations and faster floor feedback.
               </p>
               <UpgradeToProButton userId={profile.id} email={profile.email} />
-              <p className="plan-limit-value">Most coaching forms take 10-15 minutes to write manually.</p>
-              <p className="plan-limit-urgency">Start generating instantly again after upgrading.</p>
             </div>
           )}
           <div
@@ -564,9 +697,6 @@ export default function CoachingApp() {
               {loading ? 'Generating...' : 'Generate AI Coaching Form'}
             </button>
           </div>
-          {profile && isFreeLimitReached(profile) && tutorialPhase === 'off' && (
-            <p className="upgrade-inline-hint">Upgrade to continue generating</p>
-          )}
           {showValidation && !canGenerate && (
             <p className="hint-error">Enter employee name and what the coaching form is for.</p>
           )}
@@ -598,6 +728,11 @@ export default function CoachingApp() {
           )}
           {!loading && logText && (
             <div className="output-result-fade">
+              {logSource === 'deterministic' && (
+                <p className="output-fallback-notice" role="status">
+                  ⚠️ AI unavailable — showing backup coaching
+                </p>
+              )}
               {lastGenerationMs != null && logSource === 'openai' && (
                 <p className="output-generated-meta">
                   {lastGenerationMs < 1500
@@ -610,14 +745,8 @@ export default function CoachingApp() {
                   {`Prepared in ${(lastGenerationMs / 1000).toFixed(1)} seconds`}
                 </p>
               )}
-              {logSource && (
-                <p className="output-source">
-                  {logSource === 'openai'
-                    ? 'Assistant draft'
-                    : logSource === 'deterministic'
-                      ? 'Server draft'
-                      : 'Offline draft'}
-                </p>
+              {logSource === 'openai' && (
+                <p className="output-source">Assistant draft</p>
               )}
               <div className="sections">
                 {parsedSections.map((sec, i) => {
@@ -642,10 +771,60 @@ export default function CoachingApp() {
                   )
                 })}
               </div>
-              {profile && profile.usage_count >= 1 && tutorialPhase === 'off' && (
+              {tutorialPhase === 'off' && (
+                <div className="output-actions-bar">
+                  <button
+                    type="button"
+                    className="btn-secondary btn-output-action"
+                    disabled={loading || generationBlocked}
+                    onClick={() => regenerate()}
+                  >
+                    Regenerate
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary btn-output-action"
+                    onClick={() => window.dispatchEvent(new CustomEvent('trackora-open-feedback'))}
+                  >
+                    Feedback
+                  </button>
+                </div>
+              )}
+              {profile && tutorialPhase === 'off' && (
                 <p className="post-generation-time-saved">
-                  This would normally take 10-15 minutes to write manually.
+                  {pickRotatingLine(POST_GENERATION_VALUE_LINES, valueLineSeed)}
                 </p>
+              )}
+              {tutorialPhase === 'off' && (
+                <div className="output-helpfulness" role="group" aria-label="Was this coaching output helpful">
+                  <p className="output-helpfulness-q">Was this accurate and helpful for your floor coaching?</p>
+                  <div className="output-helpfulness-btns">
+                    <button
+                      type="button"
+                      className={'btn-secondary output-helpfulness-btn' + (outputHelpfulness === 'yes' ? ' is-selected' : '')}
+                      onClick={() => setOutputHelpfulness('yes')}
+                    >
+                      Yes
+                    </button>
+                    <button
+                      type="button"
+                      className={'btn-secondary output-helpfulness-btn' + (outputHelpfulness === 'no' ? ' is-selected' : '')}
+                      onClick={() => {
+                        setOutputHelpfulness('no')
+                        window.dispatchEvent(
+                          new CustomEvent('trackora-open-feedback', {
+                            detail: {
+                              presetMessage:
+                                'The last coaching form missed the mark (accuracy or tone): ',
+                            },
+                          }),
+                        )
+                      }}
+                    >
+                      No — send feedback
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -672,7 +851,10 @@ export default function CoachingApp() {
               {tutorialStep.title}
             </h2>
             <p className="tutorial-welcome-lede">{tutorialStep.body}</p>
-            <p className="tutorial-note">Each form can save 10-15 minutes of manual work.</p>
+            {tutorialStep.support && <p className="tutorial-note">{tutorialStep.support}</p>}
+            {tutorialStepIndex === TUTORIAL_STEPS.length - 1 && (
+              <p className="tutorial-note">Build stronger coaching in less time — starting with your next shift.</p>
+            )}
             <div className="tutorial-actions-row">
               {tutorialStepIndex > 0 && (
                 <button type="button" className="btn-secondary tutorial-back-btn" onClick={onTutorialBack}>
@@ -712,14 +894,14 @@ export default function CoachingApp() {
           />
           <div className="paywall-modal card" role="dialog" aria-modal="true" aria-labelledby="paywall-title">
             <h2 id="paywall-title" className="paywall-title">
-              You&apos;ve used your 3 free AI coaching forms
+              {FREE_LIMIT_HEADLINE}
             </h2>
             <p className="paywall-body">
-              Upgrade to Pro to generate unlimited coaching forms in seconds and save hours of manual work.
+              Coach faster, stay consistent, and tie feedback to activations and store performance. Unlimited
+              generations keep your Mobile Experts aligned before the shift ends.
             </p>
-            <p className="paywall-price">Only $8.99/month</p>
-            <p className="paywall-value-line">Most coaching forms take 10-15 minutes to write manually.</p>
-            <p className="paywall-urgency">Start generating instantly again after upgrading.</p>
+            <p className="paywall-price">$8.99/month — unlimited coaching generations</p>
+            <p className="paywall-value-line">One strong activation often covers the month.</p>
             <div className="paywall-actions">
               <UpgradeToProButton userId={profile.id} email={profile.email} />
               <button

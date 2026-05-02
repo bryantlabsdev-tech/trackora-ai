@@ -2,7 +2,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   ensureProfileRow,
-  incrementAiUsage,
   markPaywallSeen,
   markTutorialSeen,
   resetTutorialForReplay,
@@ -15,7 +14,6 @@ type ProfileContextValue = {
   error: string | null
   refresh: () => Promise<void>
   applyUsageSnapshot: (snapshot: { usageCount: number; isPro: boolean }) => void
-  recordOpenAiGeneration: () => Promise<void>
   completeTutorial: () => Promise<boolean>
   replayTutorialFromSettings: () => Promise<boolean>
   acknowledgePaywallSeen: () => Promise<boolean>
@@ -72,7 +70,7 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
     const shadow = readUsageShadow()
     const mergedUsage =
       ensured.is_pro || shadow == null ? ensured.usage_count : Math.min(FREE_AI_GENERATION_LIMIT, Math.max(ensured.usage_count, shadow))
-    if (!ensured.is_pro && mergedUsage > ensured.usage_count) {
+    if (!ensured.is_pro && mergedUsage > ensured.usage_count && import.meta.env.DEV) {
       console.log('[usage] applying local shadow count while waiting for server sync:', mergedUsage)
     }
     setProfile({ ...ensured, usage_count: mergedUsage })
@@ -84,47 +82,15 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
     void refresh()
   }, [refresh])
 
-  const recordOpenAiGeneration = useCallback(async () => {
-    let localCountForSync: number | null = null
-    setProfile((prev) => {
-      if (!prev || prev.is_pro) return prev
-      const bonus = prev.bonus_ai_generations ?? 0
-      if (bonus > 0) {
-        return { ...prev, bonus_ai_generations: Math.max(0, bonus - 1) }
-      }
-      const next = Math.min(FREE_AI_GENERATION_LIMIT, prev.usage_count + 1)
-      localCountForSync = next
-      writeUsageShadow(next)
-      return { ...prev, usage_count: next }
-    })
-
-    const result = await incrementAiUsage(client)
-    if (!result.ok) {
-      console.error('[usage] incrementAiUsage failed; using local shadow until server sync works')
-    } else {
-      console.log('[usage] incrementAiUsage succeeded')
-    }
-
-    await refresh()
-    if (localCountForSync != null && result.ok) {
-      try {
-        const latestShadow = readUsageShadow()
-        if (latestShadow != null && latestShadow <= localCountForSync) {
-          window.localStorage.removeItem(usageShadowKey)
-        }
-      } catch {
-        // ignore
-      }
-    }
-  }, [client, refresh, readUsageShadow, usageShadowKey, writeUsageShadow])
-
   const applyUsageSnapshot = useCallback((snapshot: { usageCount: number; isPro: boolean }) => {
     setProfile((prev) => {
       if (!prev) return prev
       return {
         ...prev,
         is_pro: snapshot.isPro,
-        usage_count: Math.max(0, Math.floor(snapshot.usageCount)),
+        usage_count: Number.isFinite(snapshot.usageCount)
+          ? Math.trunc(snapshot.usageCount)
+          : prev.usage_count,
       }
     })
   }, [])
@@ -154,7 +120,6 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
       error,
       refresh,
       applyUsageSnapshot,
-      recordOpenAiGeneration,
       completeTutorial,
       replayTutorialFromSettings,
       acknowledgePaywallSeen,
@@ -165,7 +130,6 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
       error,
       refresh,
       applyUsageSnapshot,
-      recordOpenAiGeneration,
       completeTutorial,
       replayTutorialFromSettings,
       acknowledgePaywallSeen,

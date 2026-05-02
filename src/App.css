@@ -61,6 +61,50 @@
   color: var(--muted);
 }
 
+.quick-coach {
+  margin: 0 0 1.05rem;
+}
+
+.quick-coach-label {
+  margin: 0 0 0.45rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.quick-coach-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.quick-coach-btn {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 0.35rem 0.65rem;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--bg-elevated);
+  color: var(--text);
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.quick-coach-btn:hover {
+  background: rgba(129, 140, 248, 0.12);
+  border-color: rgba(129, 140, 248, 0.35);
+}
+
+.quick-coach-btn:active {
+  transform: scale(0.98);
+}
+
 .mode-toggle {
   display: flex;
   padding: 0.25rem;
@@ -451,6 +495,18 @@
   background: rgba(251, 191, 36, 0.06);
 }
 
+.plan-limit-banner--secondary {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.plan-limit-text--compact {
+  margin: 0 0 0.65rem;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 .plan-limit-title {
   margin: 0 0 0.45rem;
   font-size: 0.94rem;
@@ -478,6 +534,13 @@
   font-size: 0.75rem;
   line-height: 1.35;
   color: rgba(251, 191, 36, 0.9);
+}
+
+.plan-limit-extra {
+  margin: 0.45rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--muted);
 }
 
 .upgrade-checkout-wrap {
@@ -531,10 +594,58 @@
   filter: saturate(0.88);
 }
 
+.output-fallback-notice {
+  margin: 0 0 0.65rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: var(--radius-lg);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: rgba(251, 191, 36, 0.95);
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.22);
+}
+
 .post-generation-time-saved {
   margin: 0.7rem 0 0;
   font-size: 0.78rem;
   color: var(--muted);
+}
+
+.output-actions-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.85rem 0 0;
+}
+
+.btn-output-action {
+  font-size: 0.8125rem;
+  padding: 0.45rem 0.85rem;
+}
+
+.output-helpfulness {
+  margin: 1rem 0 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.output-helpfulness-q {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.output-helpfulness-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.output-helpfulness-btn.is-selected {
+  border-color: rgba(129, 140, 248, 0.55);
+  box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.25) inset;
 }
 
 .upgrade-inline-hint {

@@ -54,9 +54,11 @@ function mapSuccessToResult(data: ApiJson): CoachingLogResult | null {
   let serverSource: 'openai' | 'deterministic'
   if (rawSource === 'openai') {
     if (typeof usedOpenAI === 'boolean' && !usedOpenAI) {
-      console.warn(
-        '[coaching API] server sent source "openai" but usedOpenAI false; labeling as deterministic',
-      )
+      if (import.meta.env.DEV) {
+        console.warn(
+          '[coaching API] server sent source "openai" but usedOpenAI false; labeling as deterministic',
+        )
+      }
       serverSource = 'deterministic'
     } else {
       serverSource = 'openai'
@@ -64,34 +66,40 @@ function mapSuccessToResult(data: ApiJson): CoachingLogResult | null {
   } else if (rawSource === 'deterministic') {
     serverSource = 'deterministic'
   } else {
-    console.warn(
-      '[coaching API] missing or unknown source; treating as deterministic (not OpenAI)',
-      rawSource,
-    )
+    if (import.meta.env.DEV) {
+      console.warn(
+        '[coaching API] missing or unknown source; treating as deterministic (not OpenAI)',
+        rawSource,
+      )
+    }
     serverSource = 'deterministic'
   }
 
-  const openaiActuallyUsed = serverSource === 'openai'
-  console.log('[coaching API] resolved labeling', {
-    bodyOk: data.ok === true || data.ok === undefined,
-    sourceRaw: rawSource,
-    sourceResolved: serverSource,
-    usedOpenAIField: usedOpenAI,
-    openaiActuallyUsed,
-  })
-
-  const usage =
-    Number.isFinite(data.usageCount) &&
-    Number.isFinite(data.remaining) &&
-    Number.isFinite(data.freeLimit) &&
-    typeof data.isPro === 'boolean'
-      ? {
-          usageCount: Number(data.usageCount),
-          remaining: Number(data.remaining),
-          freeLimit: Number(data.freeLimit),
-          isPro: data.isPro,
+  // JSON.stringify drops Infinity; Pro responses often omit a finite `remaining`.
+  const freeLimit = Number(data.freeLimit)
+  const usageCount = Number(data.usageCount)
+  const isProFlag = data.isPro === true
+  let usage: CoachingLogResult['usage'] = undefined
+  if (typeof data.isPro === 'boolean' && Number.isFinite(freeLimit) && Number.isFinite(usageCount)) {
+    if (isProFlag) {
+      usage = {
+        usageCount,
+        remaining: Number.POSITIVE_INFINITY,
+        freeLimit,
+        isPro: true,
+      }
+    } else {
+      const remaining = Number(data.remaining)
+      if (Number.isFinite(remaining)) {
+        usage = {
+          usageCount,
+          remaining: Math.max(0, remaining),
+          freeLimit,
+          isPro: false,
         }
-      : undefined
+      }
+    }
+  }
   return { text, source: serverSource, usage }
 }
 
@@ -105,7 +113,9 @@ async function fetchCoachingLogOnce(
   const payload = JSON.stringify({ action: 'coaching_log', payload: bodyPayload })
   const sessionResult = await supabase?.auth.getSession()
   const accessToken = sessionResult?.data?.session?.access_token ?? null
-  console.log('Sending auth token:', Boolean(accessToken))
+  if (import.meta.env.DEV) {
+    console.log('Sending auth token:', Boolean(accessToken))
+  }
 
   let res: Response
   try {
@@ -138,16 +148,18 @@ async function fetchCoachingLogOnce(
     return null
   }
 
-  console.log('[coaching API] response', {
-    url,
-    httpOk: res.ok,
-    httpStatus: res.status,
-    bodyOk: data?.ok,
-    source: data?.source,
-    usedOpenAI: data?.usedOpenAI,
-    hasText: typeof data?.text === 'string' && Boolean(data.text?.trim()),
-    error: data?.error,
-  })
+  if (import.meta.env.DEV) {
+    console.log('[coaching API] response', {
+      url,
+      httpOk: res.ok,
+      httpStatus: res.status,
+      bodyOk: data?.ok,
+      source: data?.source,
+      usedOpenAI: data?.usedOpenAI,
+      hasText: typeof data?.text === 'string' && Boolean(data.text?.trim()),
+      error: data?.error,
+    })
+  }
 
   if (!res.ok) {
     if (res.status === 403 && data?.code === 'FREE_LIMIT_REACHED') {
@@ -180,7 +192,9 @@ export async function requestCoachingLog(
   }
   if (result) return result
 
-  console.warn('[coaching API] retrying once after failure')
+  if (import.meta.env.DEV) {
+    console.warn('[coaching API] retrying once after failure')
+  }
   try {
     result = await fetchCoachingLogOnce(clean, options)
   } catch (err) {
