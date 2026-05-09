@@ -15,6 +15,7 @@ import {
   classifyIssue,
   normalizeIssueText,
 } from '../shared/coachingIssueClassifier.mjs'
+import { isLightReminderCoaching } from '../shared/coachingReminderTone.mjs'
 import { sanitizeCoachingPayload } from '../shared/sanitizeCoachingPayload.mjs'
 import {
   buildTopicRetryUserMessage,
@@ -272,7 +273,8 @@ const COACHING_PRIORITY =
   '2. Apply APS / HPA / MPT definitions ONLY when those metrics appear in the input.\n' +
   '3. Do not mix unrelated topics or domains.\n' +
   '4. Keep content tight and realistic: aim for roughly 3–5 sentences of core manager substance across the whole form, within the required section titles below—no filler paragraphs.\n' +
-  '5. Avoid generic or corporate filler language; do not invent KPIs or numbers.\n\n'
+  '5. Avoid generic or corporate filler language; do not invent KPIs or numbers.\n' +
+  '6. The notes field (when present) strongly influences tone and severity: if it signals a reminder, informal coaching, or explicitly says this is not a write-up, the entire form must be softer, shorter, and non-disciplinary while staying truthful to coachingReason.\n\n'
 
 /** Corrective coaching — natural prose, anchored to user input; topic guide appended per request. */
 const RETAIL_WIRELESS_METRIC_DEFINITIONS =
@@ -402,12 +404,35 @@ const RECOGNITION_PROMPT =
 
 const COACHING_USER_PREFIX =
   'TASK: Write the full coaching form. Stay anchored to coachingReason and notes; polished but not generic.\n' +
+  'Optional notes are authoritative for tone: phrases like “just a reminder,” “friendly reminder,” “not a write-up,” “light coaching,” or “verbal reminder” mean a SHORT alignment reminder—not a disciplinary coaching document. Match that intent in every section.\n' +
   'Decide whether the user is focused on metrics (APS/HPA/MPT) or a behavioral scenario (or both), and follow the matching rules in the system message.\n' +
   'If the topic is about floor performance or selling, connect behavior to outcomes (goals, activations, commission opportunity, gaps between sales) as described under BUSINESS OUTCOMES—without inventing numbers.\n' +
   'If the JSON references APS, HPA, or MPT, use ONLY the retail wireless metric definitions from the system message—do not guess what those letters mean.\n' +
   'Use ISSUE_TOPIC_HINT and the TOPIC GUIDE for category/tone only—do not drift into unrelated themes.\n' +
   'If numbers exist in the JSON, reference them faithfully; never invent goals or extra KPIs.\n' +
   'Problem / why it matters / floor actions must come through in Situation, Impact, and Next Steps as described in the system message. Keep it short and manager-real.\n\n'
+
+/** Appended to system message when REMINDER_MODE applies — overrides conflicting tone rules above. */
+const REMINDER_COACHING_MODE =
+  'REMINDER_MODE (this request):\n' +
+  'The user message includes REMINDER_MODE: true. These instructions OVERRIDE conflicting coaching tone, length, and accountability rules elsewhere in this system message.\n\n' +
+  'INTENT:\n' +
+  '- Write a quick floor alignment REMINDER. This is not a formal write-up or heavy corrective document.\n' +
+  '- Professional, warm, and brief—like a short check-in.\n\n' +
+  'STRICTLY AVOID (and close variants):\n' +
+  '- Words/phrases: compliance, policy violation, disciplinary, corrective action, disrupt productivity, undermine, performance improvement plan, PIP.\n' +
+  '- Harsh expectation phrasing: “I expect,” “we expect,” “expect to see” (use softer wording: “going forward, please…,” “let’s keep…,” “I’ll check in…”).\n' +
+  '- “Expected schedule” / “break schedule” is fine when describing timing neutrally.\n\n' +
+  'LENGTH & SHAPE:\n' +
+  '- Same section titles and order as the main prompt.\n' +
+  '- Every section: 1–2 SHORT sentences (one sentence is OK for Behavior or Impact).\n' +
+  '- Next Steps: 2–3 concise bullets.\n' +
+  '- Coaching Category: light label (e.g. “Attendance / Break Reminder”)—never “Policy Violation” or disciplinary framing.\n\n' +
+  'CONTENT:\n' +
+  '- Pre-Coaching Notes: open with the employee’s name; mirror reminder language from notes when present; state the facts from coachingReason plainly.\n' +
+  '- Situation / Behavior: neutral, factual, forward-looking—no scolding.\n' +
+  '- Impact: light “why it helps the team” (coverage, rhythm, consistency)—no doom framing.\n' +
+  '- Manager Follow-Up: supportive (e.g. will monitor lightly / check in if something needs adjusting)—not threatening.\n'
 
 const RECOGNITION_USER_PREFIX =
   'TASK: Recognition form only. 100% positive reinforcement. You are NOT writing coaching.\n' +
@@ -482,11 +507,17 @@ function buildCoachingLogMessages(action, payload) {
   const { primary: issuePrimary } = classifyIssue(blob, mode)
   const topicGuide = buildCoachingClassRules(issuePrimary, mode)
 
+  const reminderTone =
+    mode === 'coaching' && isLightReminderCoaching(payload?.notes, payload?.coachingReason)
+
   let systemPrompt
   if (mode === 'recognition') {
     systemPrompt = `${RECOGNITION_PROMPT}\n\nTOPIC GUIDE:\n${topicGuide}`
   } else {
     systemPrompt = `${COACHING_PROMPT}\n\nTOPIC GUIDE (tone and boundaries—not a template to paste):\n${topicGuide}`
+    if (reminderTone) {
+      systemPrompt += `\n\n${REMINDER_COACHING_MODE}`
+    }
   }
 
   let userPreamble
@@ -500,7 +531,10 @@ function buildCoachingLogMessages(action, payload) {
   const user =
     userPreamble +
     (mode === 'coaching'
-      ? `ISSUE_TOPIC_HINT (for category/tone only; content must come from JSON): ${issuePrimary}\n`
+      ? `ISSUE_TOPIC_HINT (for category/tone only; content must come from JSON): ${issuePrimary}\n` +
+        (reminderTone
+          ? 'REMINDER_MODE: true — notes call for a light reminder / informal alignment (not a formal write-up). Follow REMINDER_MODE rules at the end of the system message.\n'
+          : '')
       : '') +
     'Copy-paste clean plain text. No fragments or cut-off endings.\n\n' +
     `JSON:\n${body}`

@@ -4,6 +4,7 @@
  */
 
 import { formatPersonName } from './coachingOutput.mjs'
+import { isLightReminderCoaching, stripToneOnlyNotes } from './coachingReminderTone.mjs'
 
 /** @typedef {'compliance_security' | 'attendance' | 'performance_sales' | 'recognition_positive' | 'unspecified'} IssuePrimary */
 
@@ -204,6 +205,10 @@ export function buildDeterministicCoachingForm(payload) {
     return joinSections(pre, category, situation, behavior, impact, nextSteps, followUp)
   }
 
+  if (isLightReminderCoaching(notes, reason)) {
+    return buildLightReminderDeterministicForm(name, reason, notes, primary)
+  }
+
   const issueRef = reason.endsWith('.') ? reason.slice(0, -1) : reason
 
   switch (primary) {
@@ -248,6 +253,69 @@ export function buildDeterministicCoachingForm(payload) {
       return joinSections(pre, category, situation, behavior, impact, nextSteps, followUp)
     }
   }
+}
+
+/**
+ * Softer, shorter reminder-style form when notes signal informal / reminder coaching.
+ * @param {string} name
+ * @param {string} reason
+ * @param {string} notes
+ * @param {IssuePrimary} primary
+ */
+function buildLightReminderDeterministicForm(name, reason, notes, primary) {
+  const extra = stripToneOnlyNotes(notes)
+  const breakTopic = /\bbreak\b|\blunch\b|\bclock\b/i.test(`${reason} ${notes}`)
+
+  const category = (() => {
+    if (primary === 'attendance') {
+      return breakTopic ? 'Attendance / Break Reminder' : 'Attendance / Schedule Reminder'
+    }
+    if (primary === 'compliance_security') return 'Security / Procedure Reminder'
+    if (primary === 'performance_sales') return 'Performance Check-in Reminder'
+    return 'Coaching Reminder'
+  })()
+
+  let pre
+  if (primary === 'attendance' && breakTopic) {
+    pre = `${name}, this is just a quick reminder to make sure breaks stay aligned with the expected schedule. ${reason.endsWith('.') ? reason : `${reason}.`}`
+  } else {
+    const r = reason.endsWith('.') ? reason : `${reason}.`
+    pre = `${name}, this is just a quick reminder to stay aligned on the floor. ${r}`
+  }
+  if (extra) {
+    pre += ` ${extra.endsWith('.') ? extra : `${extra}.`}`
+  }
+
+  const situation = reason.endsWith('.') ? reason : `${reason}.`
+
+  let behavior
+  if (primary === 'attendance' && breakTopic) {
+    behavior = `Moving forward, please keep paid breaks within the expected break schedule and make sure lunches continue to be clocked out properly.`
+  } else {
+    behavior = `Moving forward, please keep this aligned with team expectations, and reach out if you need support or a schedule tweak.`
+  }
+
+  let impact
+  if (primary === 'attendance') {
+    impact = `Keeping breaks and schedules consistent helps protect coverage and keeps the team running smoothly.`
+  } else if (primary === 'compliance_security') {
+    impact = `Staying consistent with procedures keeps everyone safe and the day running smoothly.`
+  } else if (primary === 'performance_sales') {
+    impact = `Small alignments on the floor help the team stay on track together.`
+  } else {
+    impact = `Staying aligned helps the team operate smoothly day to day.`
+  }
+
+  let nextSteps
+  if (primary === 'attendance' && breakTopic) {
+    nextSteps = `• Keep paid breaks within the expected break schedule.\n• Continue clocking out for lunch.\n• Reach out if you need help adjusting your schedule.`
+  } else {
+    nextSteps = `• Stay aligned with what we discussed.\n• Ask if you need clarity on expectations.\n• Let me know if your schedule needs a tweak.`
+  }
+
+  const followUp = `I'll continue to monitor and check in if anything needs to be adjusted.`
+
+  return joinSections(pre, category, situation, behavior, impact, nextSteps, followUp)
 }
 
 /** @param {string} pre @param {string} category @param {string} situation @param {string} behavior @param {string} impact @param {string} next @param {string} follow */

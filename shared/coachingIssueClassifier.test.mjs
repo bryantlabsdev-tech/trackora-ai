@@ -70,6 +70,25 @@ describe('grounded deterministic form (no cross-category leakage)', () => {
       'store behind',
     ])
   })
+
+  test('reminder notes → soft break coaching without disciplinary phrasing', () => {
+    const text = buildDeterministicCoachingForm({
+      employeeName: 'Leeann',
+      coachingReason: '2 fifteen-minute breaks on the clock + 30-minute lunch clocked out',
+      notes: 'this is just a reminder',
+      mode: 'coaching',
+    })
+    assert.match(text, /Leeann/i)
+    assert.match(text, /Attendance.*Break Reminder/i)
+    assertTextExcludesAll(text, [
+      'compliance',
+      'policy violation',
+      'disrupt productivity',
+      'expect to see',
+      'I expect',
+      'we expect',
+    ])
+  })
 })
 
 describe('prompt constraint strings', () => {
