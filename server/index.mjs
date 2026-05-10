@@ -19,6 +19,11 @@ import {
 import { isLightReminderCoaching } from '../shared/coachingReminderTone.mjs'
 import { sanitizeCoachingPayload } from '../shared/sanitizeCoachingPayload.mjs'
 import {
+  buildRefinementDirective,
+  sanitizeRefineSectionPayload,
+  validateRefineSectionPayload,
+} from '../shared/refineSectionPayload.mjs'
+import {
   buildTopicRetryUserMessage,
   coachingOutputViolatesTopicAnchor,
 } from '../shared/coachingTopicValidation.mjs'
@@ -150,7 +155,6 @@ async function syncSubscriptionToUser(params) {
     stripe_subscription_id: subscriptionId,
     subscription_status: access.subscriptionStatus,
     current_period_end: access.currentPeriodEndIso,
-    plan: access.isPro ? 'pro' : 'free',
   }
 
   const { data, error } = await supabaseAdmin
@@ -179,7 +183,6 @@ async function syncSubscriptionToUser(params) {
     is_pro: updatePayload.is_pro,
     subscription_status: updatePayload.subscription_status,
     current_period_end: updatePayload.current_period_end,
-    plan: updatePayload.plan,
   })
   return { ok: true, profileId, updatePayload }
 }
@@ -503,21 +506,25 @@ const RECOGNITION_USER_PREFIX =
 
 /**
  * @param {Array<{ role: string; content: string }>} chatMessages
+ * @param {{ maxTokens?: number; temperature?: number }} [opts]
  * @returns {Promise<string>}
  */
-async function callOpenAIChat(chatMessages) {
+async function callOpenAIChat(chatMessages, opts = {}) {
   if (!openai) {
     const err = new Error('OpenAI is not configured (missing OPENAI_API_KEY).')
     err.code = 'NO_KEY'
     throw err
   }
 
+  const max_tokens = typeof opts.maxTokens === 'number' ? opts.maxTokens : 900
+  const temperature = typeof opts.temperature === 'number' ? opts.temperature : 0.58
+
   try {
     const completion = await openai.chat.completions.create({
       model: MODEL,
       messages: chatMessages,
-      temperature: 0.58,
-      max_tokens: 900,
+      temperature,
+      max_tokens,
     })
 
     const text = completion.choices[0]?.message?.content?.trim()
@@ -542,15 +549,83 @@ async function callOpenAIChat(chatMessages) {
 /**
  * One immediate retry on transient OpenAI failures before caller falls back to deterministic output.
  * @param {Array<{ role: string; content: string }>} chatMessages
+ * @param {{ maxTokens?: number; temperature?: number }} [opts]
  */
-async function callOpenAIChatWithOneRetry(chatMessages) {
+async function callOpenAIChatWithOneRetry(chatMessages, opts) {
   try {
-    return await callOpenAIChat(chatMessages)
+    return await callOpenAIChat(chatMessages, opts)
   } catch (e) {
     if (e && typeof e === 'object' && e.code === 'NO_KEY') throw e
     console.warn('[api/ai] OpenAI call failed, retrying once:', e?.message)
-    return await callOpenAIChat(chatMessages)
+    return await callOpenAIChat(chatMessages, opts)
   }
+}
+
+/**
+ * Normalize `action` so POST /api/ai never mis-routes (whitespace, unicode, casing).
+ * @param {unknown} raw
+ * @returns {string}
+ */
+function normalizeAiRouteAction(raw) {
+  if (raw == null) return ''
+  let s = typeof raw === 'string' ? raw.trim() : String(raw).trim()
+  try {
+    s = s.normalize('NFKC')
+  } catch {
+    /* ignore */
+  }
+  const lower = s.toLowerCase().replace(/\s+/g, '_')
+  if (lower === 'coaching_log') return 'coaching_log'
+  if (lower === 'refine_section') return 'refine_section'
+  return s
+}
+
+function buildRefineSectionPrompt(payload) {
+  const directive = buildRefinementDirective(payload)
+  const sectionLabel =
+    payload.sectionName ||
+    payload.sectionKey ||
+    (typeof payload.sectionTitle === 'string' ? payload.sectionTitle.trim() : '') ||
+    'Section'
+
+  const modeLine =
+    payload.mode === 'recognition'
+      ? 'You refine ONE section of a retail recognition / positive-feedback form.'
+      : 'You refine ONE section of a retail corrective coaching documentation form.'
+
+  const coachingCtx =
+    typeof payload.coachingFor === 'string' && payload.coachingFor.trim()
+      ? `ORIGINAL COACHING TOPIC (stay on-topic): ${payload.coachingFor.trim()}\n\n`
+      : ''
+
+  const employeeLine =
+    typeof payload.employeeName === 'string' && payload.employeeName.trim()
+      ? `Employee name (use naturally): ${payload.employeeName.trim()}\n\n`
+      : ''
+
+  const system = `${modeLine}
+Rewrite ONLY the section body below. Output plain text only — no section header line, no markdown fences, no quotes.
+Preserve "- " bullets when the section uses bullets. Do not invent facts or HR processes.`
+
+  const user = `${employeeLine}${coachingCtx}SECTION KEY: ${payload.sectionKey || sectionLabel}
+SECTION TITLE: ${payload.sectionTitle || sectionLabel}
+
+FULL FORM (context only):
+---
+${payload.fullGeneratedForm}
+---
+
+SECTION TEXT TO REWRITE:
+---
+${payload.currentSectionText}
+---
+
+REFINEMENT INSTRUCTION:
+${directive}
+
+Reply with only the rewritten section body.`
+
+  return { system, user }
 }
 
 /**
@@ -822,7 +897,8 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
 })
 
 app.use(cors({ origin: true }))
-app.use(express.json({ limit: '256kb' }))
+/** Coaching + section refine send full form context — allow modest payloads. */
+app.use(express.json({ limit: '512kb' }))
 
 const apiAiRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -1201,15 +1277,15 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
   if (!authHeader || typeof authHeader !== 'string') {
     return res.status(401).json({ ok: false, error: 'Unauthorized' })
   }
-  const action = req.body?.action
   let payload = req.body?.payload
   let isTutorialRun = false
   let authUserId = null
   let authUserEmail = null
   let usageSnapshot = null
-  if (!action || typeof action !== 'string' || !payload || typeof payload !== 'object') {
-    console.error('[api/ai] bad request: expected { action, payload }')
-    return res.status(400).json({ ok: false, error: 'Expected { action, payload }.' })
+
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    console.error('[api/ai] bad request: expected object payload')
+    return res.status(400).json({ ok: false, error: 'Expected { action, payload } with a JSON object payload.' })
   }
 
   debugLog('SERVER_API_AI_AUTH_HEADER_EXISTS', Boolean(req.headers.authorization))
@@ -1221,50 +1297,132 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
   authUserEmail = auth.email
   debugLog('SERVER_API_AI_USER', { userId: authUserId, email: authUserEmail })
 
-  if (action === 'coaching_log') {
-    isTutorialRun = payload?.isTutorialRun === true
-    payload = sanitizeCoachingPayload(payload)
-    if (isTutorialRun) {
-      debugLog('[api/ai] coaching_log isTutorialRun (omit from usage; not passed to model)')
+  const action = normalizeAiRouteAction(req.body?.action)
+  if (!action) {
+    return res.status(400).json({ ok: false, error: 'Missing or invalid action.' })
+  }
+
+  /**
+   * refine_section runs first and returns — never passes through "unknown action".
+   * Uses normalized action string (NFKC + casing) so routing cannot silently fail.
+   */
+  if (action === 'refine_section') {
+    const refinePayload = sanitizeRefineSectionPayload(payload)
+    const verr = validateRefineSectionPayload(refinePayload)
+    if (verr) {
+      return res.status(400).json({ ok: false, error: verr })
     }
+
     const profileResult = await getProfileForUser(authUserId)
     if (!profileResult.profile || profileResult.error) {
       return res.status(500).json({ ok: false, error: profileResult.error || 'Could not load profile.' })
     }
     const profile = profileResult.profile
     usageSnapshot = usageEnvelope(profile, authUserEmail)
-    /** Effective Pro: Stripe active/trialing or owner allowlist (see shared/ownerFreePro.mjs). */
     const hasProAccess = usageSnapshot.isPro
-    const shouldBlock = !hasProAccess && usageSnapshot.usageCount >= FREE_LIMIT
+    const freeLimitReached = !hasProAccess && usageSnapshot.usageCount >= FREE_LIMIT
     debugLog('SERVER_API_AI_USAGE_CHECK', {
       userId: authUserId,
       isPro: usageSnapshot.isPro,
-      usageCountBefore: usageSnapshot.usageCount,
-      usageCountAfter: usageSnapshot.usageCount,
+      usageCount: usageSnapshot.usageCount,
       freeLimit: FREE_LIMIT,
       remaining: usageSnapshot.remaining,
-      shouldBlock,
+      freeLimitReached,
+      action: 'refine_section',
     })
-    const freeLimitReached = !hasProAccess && usageSnapshot.usageCount >= FREE_LIMIT
-    if (!isTutorialRun && freeLimitReached) {
+
+    if (freeLimitReached) {
       return res.status(403).json({ ok: false, code: 'FREE_LIMIT_REACHED', error: 'Free limit reached' })
+    }
+
+    if (!openai) {
+      return res.status(503).json({
+        ok: false,
+        error: 'Section refinement requires AI (OpenAI is not configured).',
+      })
+    }
+
+    try {
+      const prompt = buildRefineSectionPrompt(refinePayload)
+      const chatMessages = [
+        { role: 'system', content: prompt.system },
+        { role: 'user', content: prompt.user },
+      ]
+      const raw = await callOpenAIChatWithOneRetry(chatMessages, {
+        maxTokens: 700,
+        temperature: 0.48,
+      })
+      const polishedName = formatPersonName(refinePayload.employeeName ?? '')
+      const polished = polishGeneratedCoachingForm(raw.trim(), polishedName)
+      let usageOut = usageSnapshot
+      if (authUserId) {
+        const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
+        if (updated) usageOut = usageEnvelope(updated, authUserEmail)
+      }
+      debugLog('[api/ai] refine_section response', { source: 'openai', section: refinePayload.sectionName })
+      return res.json({
+        ok: true,
+        refinedText: polished,
+        refinedSectionText: polished,
+        source: 'openai',
+        usedOpenAI: true,
+        usageCount: usageOut?.usageCount ?? null,
+        remaining: usageOut?.remaining ?? null,
+        freeLimit: usageOut?.freeLimit ?? FREE_LIMIT,
+        isPro: usageOut?.isPro ?? null,
+      })
+    } catch (err) {
+      const message = typeof err?.message === 'string' ? err.message : 'Refinement failed'
+      console.error('[api/ai] refine_section error', message)
+      return res.status(500).json({
+        ok: false,
+        error: message || 'Could not refine this section. Try again.',
+      })
     }
   }
 
-  const rawName =
-    action === 'coaching_log' && typeof payload?.employeeName === 'string'
-      ? payload.employeeName
-      : ''
+  if (action !== 'coaching_log') {
+    return res.status(400).json({ ok: false, error: `Unknown action: ${action}` })
+  }
+
+  isTutorialRun = payload?.isTutorialRun === true
+  payload = sanitizeCoachingPayload(payload)
+  if (isTutorialRun) {
+    debugLog('[api/ai] coaching_log isTutorialRun (omit from usage; not passed to model)')
+  }
+
+  const profileResult = await getProfileForUser(authUserId)
+  if (!profileResult.profile || profileResult.error) {
+    return res.status(500).json({ ok: false, error: profileResult.error || 'Could not load profile.' })
+  }
+  const profile = profileResult.profile
+  usageSnapshot = usageEnvelope(profile, authUserEmail)
+  const hasProAccess = usageSnapshot.isPro
+  const freeLimitReached = !hasProAccess && usageSnapshot.usageCount >= FREE_LIMIT
+  debugLog('SERVER_API_AI_USAGE_CHECK', {
+    userId: authUserId,
+    isPro: usageSnapshot.isPro,
+    usageCount: usageSnapshot.usageCount,
+    freeLimit: FREE_LIMIT,
+    remaining: usageSnapshot.remaining,
+    freeLimitReached,
+    action: 'coaching_log',
+  })
+
+  if (!isTutorialRun && freeLimitReached) {
+    return res.status(403).json({ ok: false, code: 'FREE_LIMIT_REACHED', error: 'Free limit reached' })
+  }
+
+  const rawName = typeof payload?.employeeName === 'string' ? payload.employeeName : ''
   const payloadForAi =
-    action === 'coaching_log' && payload && typeof payload === 'object'
+    payload && typeof payload === 'object'
       ? { ...payload, employeeName: formatPersonName(payload.employeeName ?? '') }
       : payload
 
-  // OpenAI: mode "recognition" → RECOGNITION_PROMPT; otherwise → COACHING_PROMPT (fully separate templates).
-  const messages = buildCoachingLogMessages(action, payloadForAi)
+  const messages = buildCoachingLogMessages('coaching_log', payloadForAi)
   if (!messages) {
-    console.error('[api/ai] unknown action:', action)
-    return res.status(400).json({ ok: false, error: `Unknown action: ${action}` })
+    console.error('[api/ai] coaching_log messages missing')
+    return res.status(400).json({ ok: false, error: 'Could not build coaching request.' })
   }
 
   if (!openai) {
