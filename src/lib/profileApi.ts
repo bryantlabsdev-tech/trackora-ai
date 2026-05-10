@@ -6,8 +6,11 @@ function mapRow(row: ProfileRow): Profile {
   return { ...row }
 }
 
+const PROFILE_COLUMNS =
+  'id, email, is_pro, usage_count, bonus_ai_generations, has_seen_tutorial, has_seen_paywall, tutorial_welcome_bonus_granted, stripe_customer_id, stripe_subscription_id, subscription_status, current_period_end, created_at'
+
 export async function fetchProfile(client: SupabaseClient, userId: string): Promise<Profile | null> {
-  const { data, error } = await client.from('profiles').select('*').eq('id', userId).maybeSingle()
+  const { data, error } = await client.from('profiles').select(PROFILE_COLUMNS).eq('id', userId).maybeSingle()
 
   if (error) {
     console.error('[profiles] fetch', error.message)

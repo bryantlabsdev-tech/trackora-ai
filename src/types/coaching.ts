@@ -32,3 +32,30 @@ export const COACHING_FORM_SECTION_LABELS = [
 ] as const
 
 export type CoachingFormSectionLabel = (typeof COACHING_FORM_SECTION_LABELS)[number]
+
+/** Quick refinement modes — must match `shared/refineSectionPayload.mjs` REFINE_PRESET_INSTRUCTIONS keys. */
+export type RefinePreset =
+  | 'softer'
+  | 'more_direct'
+  | 'professional'
+  | 'shorten'
+  | 'expand'
+  | 'clearer_expectations'
+
+/** POST /api/ai action `refine_section` payload (aliases supported server-side). */
+export type RefineSectionApiPayload = {
+  /** Canonical section id — same as `sectionKey` when both sent. */
+  sectionName: CoachingFormSectionLabel
+  /** Same as `sectionName`; optional duplicate for clarity. */
+  sectionKey?: CoachingFormSectionLabel
+  currentSectionText: string
+  /** Alias for `currentSectionText` */
+  sectionText?: string
+  fullGeneratedForm: string
+  refinementPreset: RefinePreset | null
+  refinementInstruction: string
+  mode: FormMode
+  employeeName: string
+  /** Coaching topic / “coaching form is for” — keeps refinement on-topic. */
+  coachingFor?: string
+}

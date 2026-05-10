@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CoachingApiError, FreeLimitReachedError, requestCoachingLog } from './api/requestCoachingLog'
+import { requestRefineSection } from './api/requestRefineSection'
 import { useProfile } from './context/ProfileContext'
 import { usePostTutorialFeedbackNudge } from './context/PostTutorialFeedbackNudgeContext'
-import type { CoachingLogApiPayload, FormMode, SimpleCoachingInput } from './types/coaching'
+import type {
+  CoachingFormSectionLabel,
+  CoachingLogApiPayload,
+  FormMode,
+  RefinePreset,
+  SimpleCoachingInput,
+} from './types/coaching'
+import { COACHING_FORM_SECTION_LABELS } from './types/coaching'
 import {
   canUseAiGeneration,
   freeGenerationsRemaining,
@@ -16,6 +24,7 @@ import {
   formatSectionClipboardBlock,
   sectionClipboardHasContent,
 } from './lib/formatCoachingFormClipboard'
+import { mergeRefinedSectionIntoLog } from './lib/mergeRefinedSection'
 import { parseCoachingLogMarkdown } from './lib/parseCoachingLog'
 import { getCreateCheckoutSessionUrl } from './lib/apiBase'
 import './App.css'
@@ -331,6 +340,84 @@ const COACHING_TOPIC_BY_ID: Record<string, CoachingTopicOption> = Object.fromEnt
   COACHING_TOPIC_GROUPS.flatMap((g) => g.options.map((o) => [o.id, o] as const)),
 )
 
+/** Premium document headings (parsed section `id` matches model labels). */
+const DOCUMENT_SECTION_DISPLAY: Record<string, string> = {
+  'Pre-Coaching Notes': 'PRE-COACHING NOTES',
+  'Coaching Category': 'COACHING CATEGORY',
+  Situation: 'SITUATION',
+  Behavior: 'BEHAVIOR',
+  Impact: 'IMPACT',
+  'Next Steps': 'NEXT STEPS',
+  'Manager Follow-Up': 'MANAGER FOLLOW-UP',
+  'Coaching form': 'COACHING FORM',
+}
+
+function documentSectionTitle(sectionId: string): string {
+  return DOCUMENT_SECTION_DISPLAY[sectionId] ?? sectionId.replace(/\s+/g, ' ').trim().toUpperCase()
+}
+
+function formatGenerationBadgeLabel(
+  ms: number,
+  source: 'openai' | 'deterministic' | 'fallback' | null,
+): string {
+  if (source === 'openai' && ms < 1500) return 'Instant'
+  const s = (ms / 1000).toFixed(1)
+  return source === 'deterministic' ? `Prepared in ${s}s` : `Generated in ${s}s`
+}
+
+function OutputNextStepsBody({ body }: { body: string }) {
+  const raw = body.trim()
+  if (!raw) {
+    return <span className="output-doc-empty">—</span>
+  }
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  const items = lines
+    .map((line) => line.replace(/^[•\-\*]\s*/, '').replace(/^\d+[.)]\s+/, '').trim())
+    .filter(Boolean)
+  if (items.length === 0) {
+    return <div className="output-doc-text">{body}</div>
+  }
+  return (
+    <ul className="output-doc-bullets">
+      {items.map((text, i) => (
+        <li key={i}>{text}</li>
+      ))}
+    </ul>
+  )
+}
+
+const REFINABLE_SECTION_IDS = new Set<string>(COACHING_FORM_SECTION_LABELS)
+
+const REFINE_QUICK_OPTIONS: { preset: RefinePreset; label: string }[] = [
+  { preset: 'softer', label: 'Make softer' },
+  { preset: 'more_direct', label: 'Make more direct' },
+  { preset: 'professional', label: 'Make more professional' },
+  { preset: 'shorten', label: 'Shorten' },
+  { preset: 'expand', label: 'Expand' },
+  { preset: 'clearer_expectations', label: 'Clearer expectations' },
+]
+
+function SectionCopyIcon({ copied }: { copied: boolean }) {
+  if (copied) {
+    return (
+      <svg className="btn-section-copy-icon-svg" width="16" height="16" viewBox="0 0 16 16" aria-hidden>
+        <path
+          fill="currentColor"
+          d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 1 1 1.06-1.06l2.72 2.72 6.72-6.72a.75.75 0 0 1 1.06 0z"
+        />
+      </svg>
+    )
+  }
+  return (
+    <svg className="btn-section-copy-icon-svg" width="16" height="16" viewBox="0 0 16 16" aria-hidden>
+      <path
+        fill="currentColor"
+        d="M4 2h7a2 2 0 0 1 2 2v7h-1.5V4a.5.5 0 0 0-.5-.5H4V2zm-2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 1.5a.5.5 0 0 0-.5.5v7a.5.5 0 0 0 .5.5h7a.5.5 0 0 0 .5-.5V6a.5.5 0 0 0-.5-.5H2z"
+      />
+    </svg>
+  )
+}
+
 function emptyInput(): SimpleCoachingInput {
   return { employeeName: '', coachingReason: '', notes: '' }
 }
@@ -368,6 +455,11 @@ export default function CoachingApp() {
   const [outputHelpfulness, setOutputHelpfulness] = useState<'yes' | 'no' | null>(null)
   const [copyFormToast, setCopyFormToast] = useState(false)
   const [copyEntireSuccess, setCopyEntireSuccess] = useState(false)
+  const [refineOpenRowKey, setRefineOpenRowKey] = useState<string | null>(null)
+  const [refinePresetPick, setRefinePresetPick] = useState<RefinePreset | null>(null)
+  const [refineCustomText, setRefineCustomText] = useState('')
+  const [refiningRowKey, setRefiningRowKey] = useState<string | null>(null)
+  const [refinedFlashKeys, setRefinedFlashKeys] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     tutorialPhaseRef.current = tutorialPhase
@@ -619,6 +711,71 @@ export default function CoachingApp() {
     window.setTimeout(() => setCopyFormToast(false), 3200)
   }, [logText, parsedSections])
 
+  const applySectionRefinement = useCallback(
+    async (sectionId: CoachingFormSectionLabel, rowKey: string, currentBody: string) => {
+      if (!logText?.trim()) return
+      const preset = refinePresetPick
+      const instruction = refineCustomText.trim()
+      if (!preset && !instruction) {
+        setGenerationError('Pick a quick refinement or add custom instructions.')
+        return
+      }
+      setGenerationError(null)
+      setRefiningRowKey(rowKey)
+      try {
+        const result = await requestRefineSection({
+          sectionName: sectionId,
+          sectionKey: sectionId,
+          currentSectionText: currentBody,
+          fullGeneratedForm: logText,
+          refinementPreset: preset,
+          refinementInstruction: instruction,
+          mode: formMode,
+          employeeName: input.employeeName,
+          coachingFor: input.coachingReason,
+        })
+        setLogText(mergeRefinedSectionIntoLog(logText, sectionId, result.refinedText))
+        if (result.usage) {
+          applyUsageSnapshot({
+            usageCount: result.usage.usageCount,
+            isPro: result.usage.isPro,
+          })
+        }
+        setRefineOpenRowKey(null)
+        setRefinePresetPick(null)
+        setRefineCustomText('')
+        setRefinedFlashKeys((m) => ({ ...m, [rowKey]: true }))
+        window.setTimeout(() => {
+          setRefinedFlashKeys((m) => {
+            const next = { ...m }
+            delete next[rowKey]
+            return next
+          })
+        }, 2200)
+      } catch (err) {
+        if (err instanceof FreeLimitReachedError) {
+          setShowLimitPaywall(true)
+          try {
+            if (typeof sessionStorage !== 'undefined') {
+              sessionStorage.setItem(SESSION_PAYWALL_SHOWN_KEY, '1')
+            }
+          } catch {
+            /* ignore */
+          }
+          return
+        }
+        if (err instanceof CoachingApiError) {
+          setGenerationError(err.message)
+          return
+        }
+        setGenerationError('Could not refine this section. Please try again.')
+      } finally {
+        setRefiningRowKey(null)
+      }
+    },
+    [logText, refinePresetPick, refineCustomText, formMode, input.employeeName, applyUsageSnapshot],
+  )
+
   const applyQuickTopicById = useCallback((id: string) => {
     const opt = COACHING_TOPIC_BY_ID[id]
     if (!opt) return
@@ -784,7 +941,7 @@ export default function CoachingApp() {
           {showValidation && !canGenerate && (
             <p className="hint-error">Enter employee name and what the coaching form is for.</p>
           )}
-          {generationError && <p className="hint-error">{generationError}</p>}
+          {generationError && !logText && <p className="hint-error">{generationError}</p>}
           {profile && isFreeLimitReached(profile) && tutorialPhase === 'off' && (
             <div className="plan-limit-banner plan-limit-banner--premium" role="note">
               <div className="plan-limit-banner-top">
@@ -813,45 +970,62 @@ export default function CoachingApp() {
           ref={outputCardRef}
         >
           <div className="output-top">
-            <div className="output-top-row">
-              <h2 className="card-title">Output</h2>
-              {!loading && logText && tutorialPhase === 'off' && (
-                <button
-                  type="button"
-                  className={'btn-copy-entire' + (copyEntireSuccess ? ' is-success' : '')}
-                  onClick={() => void copyEntireForm()}
-                >
-                  {copyEntireSuccess ? (
-                    <span className="btn-copy-entire-check" aria-hidden>
-                      ✓
-                    </span>
-                  ) : null}
-                  Copy entire form
-                </button>
-              )}
-            </div>
+            {!loading && logText ? (
+              <div className="output-panel-head">
+                <div className="output-panel-head-row">
+                  <div className="output-panel-head-left">
+                    <h2 className="output-panel-title">
+                      {logSource === 'openai' ? 'Assistant Draft' : 'Coaching Draft'}
+                    </h2>
+                    {lastGenerationMs != null && (
+                      <span className="output-gen-badge">{formatGenerationBadgeLabel(lastGenerationMs, logSource)}</span>
+                    )}
+                  </div>
+                  {tutorialPhase === 'off' && (
+                    <button
+                      type="button"
+                      className={'btn-copy-entire btn-copy-entire--primary' + (copyEntireSuccess ? ' is-success' : '')}
+                      onClick={() => void copyEntireForm()}
+                    >
+                      {copyEntireSuccess ? (
+                        <span className="btn-copy-entire-check" aria-hidden>
+                          ✓
+                        </span>
+                      ) : null}
+                      Copy entire form
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="output-top-row output-top-row--placeholder">
+                <h2 className="card-title">Output</h2>
+              </div>
+            )}
           </div>
           {loading && (
             <div className="output-loading-premium" aria-busy="true" aria-live="polite">
               <p className="output-loading-caption">Generating professional coaching form...</p>
-              <div className="output-skeleton-doc">
-                <div className="output-skeleton-line output-skeleton-line--title" />
-                <div className="output-skeleton-section">
-                  <div className="output-skeleton-chip" />
-                  <div className="output-skeleton-line" />
-                  <div className="output-skeleton-line output-skeleton-line--medium" />
-                  <div className="output-skeleton-line output-skeleton-line--short" />
-                </div>
-                <div className="output-skeleton-section output-skeleton-section--delayed">
-                  <div className="output-skeleton-chip output-skeleton-chip--narrow" />
-                  <div className="output-skeleton-line" />
-                  <div className="output-skeleton-line" />
-                  <div className="output-skeleton-line output-skeleton-line--short" />
-                </div>
-                <div className="output-skeleton-section output-skeleton-section--delayed2">
-                  <div className="output-skeleton-chip output-skeleton-chip--narrow" />
-                  <div className="output-skeleton-line output-skeleton-line--medium" />
-                  <div className="output-skeleton-line" />
+              <div className="output-document output-document--loading">
+                <div className="output-skeleton-doc">
+                  <div className="output-skeleton-line output-skeleton-line--title" />
+                  <div className="output-skeleton-section">
+                    <div className="output-skeleton-chip" />
+                    <div className="output-skeleton-line" />
+                    <div className="output-skeleton-line output-skeleton-line--medium" />
+                    <div className="output-skeleton-line output-skeleton-line--short" />
+                  </div>
+                  <div className="output-skeleton-section output-skeleton-section--delayed">
+                    <div className="output-skeleton-chip output-skeleton-chip--narrow" />
+                    <div className="output-skeleton-line" />
+                    <div className="output-skeleton-line" />
+                    <div className="output-skeleton-line output-skeleton-line--short" />
+                  </div>
+                  <div className="output-skeleton-section output-skeleton-section--delayed2">
+                    <div className="output-skeleton-chip output-skeleton-chip--narrow" />
+                    <div className="output-skeleton-line output-skeleton-line--medium" />
+                    <div className="output-skeleton-line" />
+                  </div>
                 </div>
               </div>
             </div>
@@ -880,54 +1054,166 @@ export default function CoachingApp() {
           )}
           {!loading && logText && (
             <div className="output-result-fade">
+              {generationError && (
+                <p className="hint-error output-inline-error" role="alert">
+                  {generationError}
+                </p>
+              )}
               {logSource === 'deterministic' && (
                 <p className="output-fallback-notice" role="status">
                   ⚠️ AI unavailable — showing backup coaching
                 </p>
               )}
-              {lastGenerationMs != null && logSource === 'openai' && (
-                <p className="output-generated-meta">
-                  {lastGenerationMs < 1500
-                    ? 'Generated instantly ⚡'
-                    : `Generated in ${(lastGenerationMs / 1000).toFixed(1)} seconds`}
-                </p>
-              )}
-              {lastGenerationMs != null && logSource === 'deterministic' && (
-                <p className="output-generated-meta">
-                  {`Prepared in ${(lastGenerationMs / 1000).toFixed(1)} seconds`}
-                </p>
-              )}
-              {logSource === 'openai' && (
-                <p className="output-source">Assistant draft</p>
-              )}
-              <div className="sections">
-                {parsedSections.map((sec, i) => {
-                  const rowKey = `${sec.id}-${i}`
-                  const canCopy = sectionClipboardHasContent(sec.id, sec.body)
-                  return (
-                    <article key={rowKey} className="section-block">
-                      <div className="section-header">
-                        <h3>{sec.id}</h3>
-                        <button
-                          type="button"
-                          className="btn-section-copy"
-                          disabled={!canCopy}
-                          title={canCopy ? `Copy ${sec.id}` : 'Nothing to copy in this section'}
-                          onClick={() => void copySection(rowKey, sec.id, sec.body)}
-                        >
-                          {copiedSectionKeys[rowKey] ? 'Copied!' : 'Copy'}
-                        </button>
-                      </div>
-                      <div className="section-body">{sec.body}</div>
-                    </article>
-                  )
-                })}
+              <div className="output-document">
+                <div className="output-doc-summary" role="status">
+                  <span className="output-doc-summary-lead">
+                    <svg className="output-doc-summary-check" width="14" height="14" viewBox="0 0 16 16" aria-hidden>
+                      <path
+                        fill="currentColor"
+                        d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 1 1 1.06-1.06l2.72 2.72 6.72-6.72a.75.75 0 0 1 1.06 0z"
+                      />
+                    </svg>
+                    Coaching form ready
+                  </span>
+                  {lastGenerationMs != null && (
+                    <>
+                      <span className="output-doc-summary-sep" aria-hidden />
+                      <span className="output-doc-summary-meta">{formatGenerationBadgeLabel(lastGenerationMs, logSource)}</span>
+                    </>
+                  )}
+                  <span className="output-doc-summary-sep" aria-hidden />
+                  <span className="output-doc-summary-tail">Ready to copy or refine</span>
+                </div>
+
+                <div className="output-doc-sections">
+                  {parsedSections.map((sec, i) => {
+                    const rowKey = `${sec.id}-${i}`
+                    const canCopy = sectionClipboardHasContent(sec.id, sec.body)
+                    const title = documentSectionTitle(sec.id)
+                    const canRefine =
+                      tutorialPhase === 'off' && REFINABLE_SECTION_IDS.has(sec.id)
+                    const sectionLabel = sec.id as CoachingFormSectionLabel
+                    const applyDisabled =
+                      refiningRowKey !== null ||
+                      generationBlocked ||
+                      profileLoading ||
+                      !profile ||
+                      (!refinePresetPick && !refineCustomText.trim())
+                    return (
+                      <article
+                        key={rowKey}
+                        className={
+                          'output-doc-section' +
+                          (refiningRowKey === rowKey ? ' is-section-refining' : '') +
+                          (refinedFlashKeys[rowKey] ? ' is-section-refined-flash' : '')
+                        }
+                      >
+                        <div className="output-doc-section-head">
+                          <span className="output-doc-section-accent" aria-hidden />
+                          <h3 className="output-doc-section-title">{title}</h3>
+                          {refinedFlashKeys[rowKey] && (
+                            <span className="output-refine-done-badge" role="status">
+                              Refined
+                            </span>
+                          )}
+                          {canRefine && (
+                            <button
+                              type="button"
+                              className={
+                                'btn-section-refine' + (refineOpenRowKey === rowKey ? ' is-open' : '')
+                              }
+                              aria-expanded={refineOpenRowKey === rowKey}
+                              onClick={() => {
+                                setRefineOpenRowKey((k) => {
+                                  if (k === rowKey) {
+                                    return null
+                                  }
+                                  setRefinePresetPick(null)
+                                  setRefineCustomText('')
+                                  return rowKey
+                                })
+                              }}
+                            >
+                              Refine
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className={
+                              'btn-section-copy-icon' + (copiedSectionKeys[rowKey] ? ' is-copied' : '')
+                            }
+                            disabled={!canCopy}
+                            title={canCopy ? `Copy ${sec.id}` : 'Nothing to copy in this section'}
+                            aria-label={canCopy ? `Copy ${sec.id}` : 'Nothing to copy in this section'}
+                            onClick={() => void copySection(rowKey, sec.id, sec.body)}
+                          >
+                            <SectionCopyIcon copied={Boolean(copiedSectionKeys[rowKey])} />
+                          </button>
+                        </div>
+                        {canRefine && refineOpenRowKey === rowKey && (
+                          <div className="output-refine-panel">
+                            <p className="output-refine-label">Quick refinements</p>
+                            <div className="output-refine-chips" role="group" aria-label="Quick refinements">
+                              {REFINE_QUICK_OPTIONS.map((o) => (
+                                <button
+                                  key={o.preset}
+                                  type="button"
+                                  className={
+                                    'output-refine-chip' + (refinePresetPick === o.preset ? ' is-selected' : '')
+                                  }
+                                  onClick={() => setRefinePresetPick(o.preset)}
+                                >
+                                  {o.label}
+                                </button>
+                              ))}
+                            </div>
+                            <label className="output-refine-custom-label">
+                              <span className="output-refine-custom-title">
+                                Tell TrackoraAI how to refine this section…
+                              </span>
+                              <textarea
+                                className="field-control output-refine-textarea"
+                                rows={2}
+                                value={refineCustomText}
+                                onChange={(e) => setRefineCustomText(e.target.value)}
+                                placeholder="Optional details for this section only"
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="btn-primary output-refine-apply"
+                              disabled={applyDisabled}
+                              onClick={() => void applySectionRefinement(sectionLabel, rowKey, sec.body)}
+                            >
+                              {refiningRowKey === rowKey ? (
+                                <>
+                                  <span className="spinner" aria-hidden />
+                                  Refining…
+                                </>
+                              ) : (
+                                'Apply refinement'
+                              )}
+                            </button>
+                          </div>
+                        )}
+                        <div className="output-doc-section-body">
+                          {sec.id === 'Next Steps' ? (
+                            <OutputNextStepsBody body={sec.body} />
+                          ) : (
+                            <div className="output-doc-text">{sec.body}</div>
+                          )}
+                        </div>
+                      </article>
+                    )
+                  })}
+                </div>
               </div>
+
               {tutorialPhase === 'off' && (
-                <div className="output-actions-bar">
+                <div className="output-actions-row">
                   <button
                     type="button"
-                    className="btn-secondary btn-output-action"
+                    className="btn-output-regenerate"
                     disabled={loading || generationBlocked}
                     onClick={() => regenerate()}
                   >
@@ -944,7 +1230,7 @@ export default function CoachingApp() {
                   role="group"
                   aria-label="Was this coaching output helpful"
                 >
-                  <p className="output-helpfulness-q">Was this accurate and helpful for your floor coaching?</p>
+                  <p className="output-helpfulness-q">Was this useful?</p>
                   <div className="output-helpfulness-btns">
                     <button
                       type="button"
@@ -968,7 +1254,7 @@ export default function CoachingApp() {
                         )
                       }}
                     >
-                      No — send feedback
+                      Send feedback
                     </button>
                   </div>
                   {outputHelpfulness === 'yes' && (

@@ -84,7 +84,6 @@ export async function resyncAllProfilesFromStripe(stripe, supabaseAdmin, opts = 
         stripe_subscription_id: subId,
         subscription_status: access.subscriptionStatus,
         current_period_end: access.currentPeriodEndIso,
-        plan: access.isPro ? 'pro' : 'free',
       }
 
       const changed =
