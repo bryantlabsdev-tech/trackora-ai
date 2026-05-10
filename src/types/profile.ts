@@ -1,3 +1,5 @@
+import { effectivePremiumAccess } from '../../shared/ownerFreePro.mjs'
+
 /** Row shape from `public.profiles` (Supabase). */
 export type ProfileRow = {
   id: string
@@ -23,24 +25,33 @@ export type Profile = ProfileRow
 /** Max AI generations for free tier (must match server default `FREE_LIMIT`, unless you change both). */
 export const FREE_AI_GENERATION_LIMIT = 3
 
+/**
+ * Pro when Stripe subscription is active/trialing **or** owner allowlist email (see `shared/ownerFreePro.mjs`).
+ * Otherwise `past_due` / canceled do not grant access (matches server).
+ */
+export function hasPremiumAccess(profile: Profile | null): boolean {
+  if (!profile) return false
+  return effectivePremiumAccess(profile, profile.email)
+}
+
 export function canUseAiGeneration(profile: Profile | null): boolean {
   if (!profile) return false
-  if (profile.is_pro) return true
+  if (hasPremiumAccess(profile)) return true
   return profile.usage_count < FREE_AI_GENERATION_LIMIT
 }
 
 export function freeGenerationsRemaining(profile: Profile): number {
-  if (profile.is_pro) return Number.POSITIVE_INFINITY
+  if (hasPremiumAccess(profile)) return Number.POSITIVE_INFINITY
   return Math.max(0, FREE_AI_GENERATION_LIMIT - profile.usage_count)
 }
 
 /** User-facing label for remaining free generations. */
 export function freeGenerationsRemainingLabel(profile: Profile): string {
-  if (profile.is_pro) return 'Unlimited AI generations'
+  if (hasPremiumAccess(profile)) return 'Unlimited AI generations'
   const n = Math.max(0, FREE_AI_GENERATION_LIMIT - profile.usage_count)
   return `${n} free generation${n === 1 ? '' : 's'} left`
 }
 
 export function isFreeLimitReached(profile: Profile): boolean {
-  return !profile.is_pro && profile.usage_count >= FREE_AI_GENERATION_LIMIT
+  return !hasPremiumAccess(profile) && profile.usage_count >= FREE_AI_GENERATION_LIMIT
 }

@@ -87,6 +87,10 @@ describe('grounded deterministic form (no cross-category leakage)', () => {
       'expect to see',
       'I expect',
       'we expect',
+      'moving forward',
+      'maintain team coverage',
+      'consistent rhythm on the floor',
+      'monitor this lightly',
     ])
   })
 })

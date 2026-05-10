@@ -10,6 +10,8 @@ describe('isLightReminderCoaching', () => {
     assert.equal(isLightReminderCoaching('not a write up', ''), true)
     assert.equal(isLightReminderCoaching('light coaching only', ''), true)
     assert.equal(isLightReminderCoaching('verbal reminder', ''), true)
+    assert.equal(isLightReminderCoaching('not serious', ''), true)
+    assert.equal(isLightReminderCoaching('no break schedule here', ''), true)
   })
 
   test('detects phrases in coachingReason', () => {
@@ -25,6 +27,7 @@ describe('stripToneOnlyNotes', () => {
   test('removes meta-only reminder lines', () => {
     assert.equal(stripToneOnlyNotes('this is just a reminder'), '')
     assert.equal(stripToneOnlyNotes('Not a write-up.'), '')
+    assert.equal(stripToneOnlyNotes('not serious'), '')
   })
 
   test('keeps substantive notes', () => {

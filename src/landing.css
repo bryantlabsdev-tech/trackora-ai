@@ -165,11 +165,20 @@
 }
 
 .landing-hero-lead {
-  margin: 0 auto 1.2rem;
+  margin: 0 auto 0.75rem;
   max-width: 36rem;
   font-size: clamp(1.02rem, 2.1vw, 1.12rem);
   line-height: 1.5;
   color: var(--muted);
+}
+
+.landing-hero-trust-ribbon {
+  margin: 0 auto 1.35rem;
+  max-width: 36rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: rgba(148, 163, 184, 0.95);
 }
 
 

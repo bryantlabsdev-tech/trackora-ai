@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { getBillingReconcileUrl } from './apiBase'
 import type { Profile, ProfileRow } from '../types/profile'
 
 function mapRow(row: ProfileRow): Profile {
@@ -49,6 +50,39 @@ export async function ensureProfileRow(
   }
 
   return fetchProfile(client, userId)
+}
+
+/**
+ * Re-sync subscription from Stripe into `profiles` (backup if webhooks delayed). No-op without session.
+ */
+export async function reconcileStripeSubscription(client: SupabaseClient): Promise<void> {
+  try {
+    const { data: sessionData } = await client.auth.getSession()
+    const token = sessionData?.session?.access_token
+    if (!token) return
+
+    const res = await fetch(getBillingReconcileUrl(), {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    })
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      console.warn('[profiles] billing reconcile HTTP', res.status, text.slice(0, 200))
+      return
+    }
+
+    const json = await res.json().catch(() => null)
+    if (import.meta.env.DEV && json && typeof json === 'object' && 'skipped' in json) {
+      console.log('[profiles] billing reconcile:', json)
+    }
+  } catch (e) {
+    console.warn('[profiles] billing reconcile failed', e)
+  }
 }
 
 /** Call after a successful OpenAI-backed generation; RPC no-ops for Pro users. */

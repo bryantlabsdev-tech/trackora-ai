@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useProfile } from '../context/ProfileContext'
 import { getCreateBillingPortalSessionUrl, getCreateCheckoutSessionUrl } from '../lib/apiBase'
 import { supabase } from '../lib/supabase'
-import { freeGenerationsRemainingLabel } from '../types/profile'
+import { freeGenerationsRemainingLabel, hasPremiumAccess } from '../types/profile'
 
 type AccountSettingsProps = {
   userId: string
@@ -23,19 +23,22 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
   const [tutorialReplayLoading, setTutorialReplayLoading] = useState(false)
   const [tutorialReplayError, setTutorialReplayError] = useState<string | null>(null)
 
-  const planLabel = profile?.is_pro ? 'Pro' : 'Free'
+  const planLabel = profile && hasPremiumAccess(profile) ? 'Pro' : 'Free'
   const usageLabel = useMemo(() => {
     if (!profile) return 'Loading usage...'
-    if (profile.is_pro) return 'Pro Plan Active'
+    if (hasPremiumAccess(profile)) return 'Pro Plan Active'
     return `${freeGenerationsRemainingLabel(profile)} (${profile.usage_count} used)`
   }, [profile])
   const canManageSubscription = Boolean(
-    profile?.is_pro ||
+    hasPremiumAccess(profile) ||
       profile?.stripe_customer_id?.trim() ||
       profile?.stripe_subscription_id?.trim() ||
       profile?.subscription_status?.trim(),
   )
-  const subscriptionStatusLabel = profile?.is_pro ? 'active' : 'inactive'
+  const subscriptionStatusLabel =
+    profile && hasPremiumAccess(profile)
+      ? (profile.subscription_status?.trim() || 'active')
+      : profile?.subscription_status?.trim() || 'inactive'
   const currentPeriodEndLabel = useMemo(() => {
     if (!profile?.current_period_end) return null
     const d = new Date(profile.current_period_end)
@@ -185,7 +188,7 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
 
         <article className="card settings-card">
           <h2 className="card-title">Security</h2>
-          <p className="settings-note">Send yourself a secure password reset link using Supabase.</p>
+          <p className="settings-note">We’ll email you a secure link to set a new password.</p>
           <button
             type="button"
             className="btn-secondary settings-btn"

@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import dotenv from 'dotenv'
 import express from 'express'
+import rateLimit from 'express-rate-limit'
 import cors from 'cors'
 import OpenAI from 'openai'
 import Stripe from 'stripe'
@@ -21,6 +22,9 @@ import {
   buildTopicRetryUserMessage,
   coachingOutputViolatesTopicAnchor,
 } from '../shared/coachingTopicValidation.mjs'
+import { evaluateSubscriptionAccess, profileRowGrantsPremium } from '../shared/billingSubscription.mjs'
+import { effectivePremiumAccess } from '../shared/ownerFreePro.mjs'
+import { resyncAllProfilesFromStripe } from '../shared/resyncStripeProfiles.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const envFilePath = path.resolve(__dirname, '..', '.env')
@@ -29,11 +33,6 @@ dotenv.config({ path: envFilePath, override: true })
 const debugLog = (...args) => {
   if (process.env.NODE_ENV !== 'production') console.log(...args)
 }
-
-debugLog('ENV PATH:', process.cwd())
-debugLog('ENV FILE (resolved):', envFilePath)
-debugLog('ENV FILE EXISTS:', fs.existsSync(envFilePath))
-debugLog('OpenAI Key Loaded:', !!process.env.OPENAI_API_KEY)
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'
 
@@ -57,18 +56,9 @@ const supabaseAdmin =
       })
     : null
 
-const PRO_PLAN_STATUSES = new Set(['active', 'trialing'])
-const FORCE_DISABLE_STATUSES = new Set(['unpaid', 'incomplete_expired'])
-const GRACE_STATUSES = new Set(['past_due', 'incomplete'])
-
-/**
- * @param {number | null} unixSeconds
- * @returns {string | null}
- */
-function toIsoFromUnixSeconds(unixSeconds) {
-  if (!Number.isFinite(unixSeconds) || unixSeconds <= 0) return null
-  return new Date(unixSeconds * 1000).toISOString()
-}
+/** In-memory cooldown so login reconcile does not hammer Stripe. */
+const billingReconcileCooldown = new Map()
+const BILLING_RECONCILE_COOLDOWN_MS = 5 * 60 * 1000
 
 /**
  * @param {unknown} value
@@ -81,68 +71,6 @@ function pickStripeId(value) {
     return value.id
   }
   return null
-}
-
-/**
- * @param {Stripe.Subscription} subscription
- * @returns {{
- *   isPro: boolean
- *   reason: string
- *   subscriptionStatus: string | null
- *   currentPeriodEndIso: string | null
- * }}
- */
-function evaluateSubscriptionAccess(subscription) {
-  const status = typeof subscription.status === 'string' ? subscription.status : null
-  const currentPeriodEndUnix =
-    typeof subscription.current_period_end === 'number' ? subscription.current_period_end : null
-  const currentPeriodEndIso = toIsoFromUnixSeconds(currentPeriodEndUnix)
-  const nowUnix = Math.floor(Date.now() / 1000)
-  const periodActive = Number.isFinite(currentPeriodEndUnix) && currentPeriodEndUnix > nowUnix
-  const cancelAtPeriodEnd = Boolean(subscription.cancel_at_period_end)
-
-  if (status && FORCE_DISABLE_STATUSES.has(status)) {
-    return {
-      isPro: false,
-      reason: `status_${status}`,
-      subscriptionStatus: status,
-      currentPeriodEndIso,
-    }
-  }
-
-  if (status && PRO_PLAN_STATUSES.has(status)) {
-    return {
-      isPro: true,
-      reason: `status_${status}`,
-      subscriptionStatus: status,
-      currentPeriodEndIso,
-    }
-  }
-
-  if (cancelAtPeriodEnd && periodActive) {
-    return {
-      isPro: true,
-      reason: 'cancel_at_period_end_period_active',
-      subscriptionStatus: status,
-      currentPeriodEndIso,
-    }
-  }
-
-  if (status && GRACE_STATUSES.has(status) && periodActive) {
-    return {
-      isPro: true,
-      reason: `grace_${status}_period_active`,
-      subscriptionStatus: status,
-      currentPeriodEndIso,
-    }
-  }
-
-  return {
-    isPro: false,
-    reason: periodActive ? 'status_not_pro' : 'period_ended_or_missing',
-    subscriptionStatus: status,
-    currentPeriodEndIso,
-  }
 }
 
 /**
@@ -232,15 +160,141 @@ async function syncSubscriptionToUser(params) {
     .select('id')
 
   if (error) {
-    console.error('[billing-sync] Supabase update failed:', error.message)
+    console.error('[billing-sync] Supabase update FAILED', {
+      eventType,
+      profileId,
+      message: error.message,
+      code: error.code ?? null,
+    })
     return { ok: false, skipped: 'supabase_error', error: error.message }
   }
   if (!data?.length) {
-    console.error('[billing-sync] Supabase update matched no rows for profile:', profileId)
+    console.error('[billing-sync] Supabase update matched NO ROWS', { eventType, profileId })
     return { ok: false, skipped: 'no_row_updated' }
   }
 
+  console.log('[billing-sync] Supabase OK — subscription state synced', {
+    eventType,
+    profileId,
+    is_pro: updatePayload.is_pro,
+    subscription_status: updatePayload.subscription_status,
+    current_period_end: updatePayload.current_period_end,
+    plan: updatePayload.plan,
+  })
   return { ok: true, profileId, updatePayload }
+}
+
+/**
+ * Pull latest subscription from Stripe and sync to profiles (backup if webhooks lag).
+ * @param {string} userId
+ * @param {{ force?: boolean }} [opts]
+ */
+async function reconcileStripeSubscriptionForUser(userId, opts = {}) {
+  if (!stripe || !supabaseAdmin) {
+    return { ok: false, skipped: 'not_configured' }
+  }
+  const now = Date.now()
+  if (!opts.force) {
+    const last = billingReconcileCooldown.get(userId) ?? 0
+    if (now - last < BILLING_RECONCILE_COOLDOWN_MS) {
+      console.log('[billing-reconcile] cooldown active, skipping Stripe call for user', userId)
+      return { ok: true, skipped: 'cooldown' }
+    }
+  }
+  billingReconcileCooldown.set(userId, now)
+
+  const { data: row, error } = await supabaseAdmin
+    .from('profiles')
+    .select('stripe_subscription_id, stripe_customer_id')
+    .eq('id', userId)
+    .maybeSingle()
+
+  if (error) {
+    console.error('[billing-reconcile] profile load failed:', error.message)
+    return { ok: false, skipped: 'profile_load_error', error: error.message }
+  }
+  if (!row) {
+    console.warn('[billing-reconcile] no profile row', userId)
+    return { ok: false, skipped: 'no_profile' }
+  }
+
+  let subscriptionId =
+    row.stripe_subscription_id && typeof row.stripe_subscription_id === 'string'
+      ? row.stripe_subscription_id.trim()
+      : ''
+  const customerIdRaw =
+    row.stripe_customer_id && typeof row.stripe_customer_id === 'string' ? row.stripe_customer_id.trim() : ''
+
+  if (!subscriptionId && customerIdRaw) {
+    try {
+      const list = await stripe.subscriptions.list({
+        customer: customerIdRaw,
+        status: 'all',
+        limit: 10,
+      })
+      const prefer = ['active', 'trialing', 'past_due', 'unpaid', 'canceled', 'incomplete']
+      for (const st of prefer) {
+        const hit = list.data.find((s) => s.status === st)
+        if (hit?.id) {
+          subscriptionId = hit.id
+          break
+        }
+      }
+    } catch (e) {
+      const msg = typeof e?.message === 'string' ? e.message : 'list failed'
+      console.error('[billing-reconcile] subscription list failed:', msg)
+      return { ok: false, skipped: 'stripe_list_error', error: msg }
+    }
+  }
+
+  if (!subscriptionId) {
+    console.log('[billing-reconcile] no subscription to reconcile', userId)
+    return { ok: true, skipped: 'no_stripe_subscription' }
+  }
+
+  try {
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+    const customerId = pickStripeId(subscription.customer) || customerIdRaw
+    if (!customerId) {
+      console.error('[billing-reconcile] missing customer on subscription', subscriptionId)
+      return { ok: false, skipped: 'missing_customer' }
+    }
+    console.log('[billing-reconcile] syncing from Stripe API', { userId, subscriptionId })
+    return syncSubscriptionToUser({
+      eventType: 'billing.reconcile',
+      customerId,
+      subscription,
+      metadataUserId: userId,
+    })
+  } catch (e) {
+    const msg = typeof e?.message === 'string' ? e.message : 'retrieve failed'
+    console.error('[billing-reconcile] Stripe retrieve failed:', { userId, subscriptionId, message: msg })
+    return { ok: false, skipped: 'stripe_retrieve_error', error: msg }
+  }
+}
+
+/**
+ * @param {import('express').Response} res
+ * @param {string} eventType
+ * @param {Awaited<ReturnType<typeof syncSubscriptionToUser>>} result
+ */
+function respondStripeWebhookSync(res, eventType, result) {
+  if (!result.ok && result.skipped === 'profile_not_found') {
+    console.warn('[webhook/stripe] sync skipped (profile not found) — may be race before checkout metadata', {
+      eventType,
+    })
+    return res.status(200).json({ received: true, result })
+  }
+  if (!result.ok && (result.skipped === 'no_supabase_admin' || result.skipped === 'not_configured')) {
+    console.error('[webhook/stripe] sync failed — server misconfiguration', { eventType, result })
+    return res.status(503).json({ received: false, result })
+  }
+  if (!result.ok) {
+    console.error('[webhook/stripe] sync FAILED — returning 500 so Stripe retries', { eventType, result })
+    return res.status(500).json({ received: false, result })
+  }
+  console.log('[webhook/stripe] sync success', { eventType, profileId: result.profileId })
+  return res.status(200).json({ received: true, result })
 }
 
 const SECTION_SHAPE = [
@@ -272,9 +326,22 @@ const COACHING_PRIORITY =
   '1. Use only the provided input (coachingReason and notes—metrics and/or scenario).\n' +
   '2. Apply APS / HPA / MPT definitions ONLY when those metrics appear in the input.\n' +
   '3. Do not mix unrelated topics or domains.\n' +
-  '4. Keep content tight and realistic: aim for roughly 3–5 sentences of core manager substance across the whole form, within the required section titles below—no filler paragraphs.\n' +
+  '4. Keep the WHOLE form noticeably shorter than typical HR coaching: target ~35–40% less total wording—brief sections, no filler, no repeating the same facts.\n' +
   '5. Avoid generic or corporate filler language; do not invent KPIs or numbers.\n' +
-  '6. The notes field (when present) strongly influences tone and severity: if it signals a reminder, informal coaching, or explicitly says this is not a write-up, the entire form must be softer, shorter, and non-disciplinary while staying truthful to coachingReason.\n\n'
+  '6. The notes field (when present) strongly influences tone and severity: reminders, “not serious,” “light coaching,” or “no break schedule” → much softer, conversational, zero write-up tone.\n\n'
+
+const COACHING_NATURAL_VOICE =
+  'NATURAL TEAM LEAD VOICE (not corporate HR, not AI-polished):\n' +
+  '- Sound like a real Team Lead on the floor: plain words, short sentences, how people actually talk.\n' +
+  '- Do NOT repeat the same concrete details (break counts, times, metric numbers) in every section—state specifics once in Pre-Coaching Notes and/or Situation, then use short references (“that timing,” “what we talked about”) in Behavior / Impact / Next Steps.\n' +
+  '- Never restate the full issue three or four times with different buzzwords.\n\n' +
+  'STRICTLY DO NOT USE (or close paraphrases):\n' +
+  '- maintain team coverage, consistent rhythm on the floor, moving forward, monitor this lightly, adhere to expectations, compliance, ensure alignment, performance improvement plan, mitigate, operational excellence, cascade.\n\n' +
+  'Lean on simple language instead (pick a few that fit; do not stuff every phrase into one document):\n' +
+  '- just wanted to mention, wanted to bring it up, keep an eye on, try to, all good just make sure, let’s keep it cleaned up, quick heads-up, nothing crazy.\n\n' +
+  'TONE VARIATION:\n' +
+  '- Not every coaching should match the same cadence. Sometimes keep it very short; sometimes a touch more conversational; sometimes more direct—still human.\n' +
+  '- Vary how sections open so outputs do not all read like the same template.\n\n'
 
 /** Corrective coaching — natural prose, anchored to user input; topic guide appended per request. */
 const RETAIL_WIRELESS_METRIC_DEFINITIONS =
@@ -293,30 +360,26 @@ const COACHING_SCENARIO_VS_METRICS =
   'The user may give performance metrics (APS, HPA, MPT), OR a behavioral scenario (lateness, poor engagement, misuse of keys, uniform, conduct, etc.), OR both—follow what is actually in coachingReason and notes.\n\n' +
   'IF THE INPUT IS PRIMARILY METRICS (APS / HPA / MPT):\n' +
   '- Use the metric definitions above exactly—never reinterpret those acronyms.\n' +
-  '- Tie on-floor behavior to business results: how effort and pacing connect to activations, store goals, earning opportunity, and avoiding long dead gaps between sales—using only what the input supports.\n\n' +
+  '- Tie behavior to results in plain language—only what the input supports.\n\n' +
   'IF THE INPUT IS PRIMARILY A SCENARIO (not a metrics story):\n' +
-  '- Address the behavior directly. Firm but professional.\n' +
-  '- Explain why it matters (team, customers, safety, standards—whatever fits the scenario).\n' +
-  '- Give a clear expectation moving forward.\n\n' +
-  'ALWAYS: Follow PRIORITY at the top of this message. Sound like a real manager—direct and actionable.\n\n'
+  '- Address it straight. Firm when needed, still conversational—not a policy memo.\n' +
+  '- Say why it matters in one simple beat if Impact needs it.\n\n' +
+  'ALWAYS: Follow PRIORITY and NATURAL TEAM LEAD VOICE. Short and real.\n\n'
 
 const COACHING_BUSINESS_OUTCOMES =
   'BUSINESS OUTCOMES — when coachingReason/notes are about selling or floor performance (metrics like APS/HPA/MPT, goals, activations, accessories, conversion, customer engagement for sales, or similar):\n' +
-  '- Make Impact explicit: explain how the current behavior hurts team results—e.g. missed shots at postpaid activations, falling short of store goals, weaker commission opportunity, or too much idle time between customer touches/sales opportunities.\n' +
-  '- Connect the fix to outcomes: clearer path to more activations, tighter rhythm on the floor (fewer long gaps between sales conversations), stronger alignment with store targets, and protecting what they earn—without inventing dollar amounts, quotas, or rankings not in the input.\n' +
-  '- Use plain Team Lead language (not buzzwords): line of sight from behavior → opportunities → closes → contribution to the board.\n\n' +
-  'When the topic is NOT about selling or performance (e.g. keys/security or attendance with no sales angle in the user text), keep Impact in that lane—safety, standards, coverage, trust—do not force sales outcomes.\n\n'
+  '- Impact in one or two plain sentences: how it shows up for customers or the shift—without stacked buzzwords or repeating metrics already stated above.\n' +
+  '- Keep fixes grounded in what the user wrote; no invented quotas or rankings.\n\n' +
+  'When the topic is NOT about selling or performance (e.g. keys/security or attendance with no sales angle in the user text), keep Impact short and specific to that lane—do not force sales outcomes.\n\n'
 
 const COACHING_STRUCTURE_AND_TONE =
   'COACHING QUALITY:\n' +
-  '- Retail wireless Team Lead → Mobile Expert on the floor: direct, real, slightly motivational but not corny.\n' +
-  '- Every section ties to coachingReason and notes. Situation + Behavior = problem; Impact = why it matters (and sales outcomes when the topic fits); Next Steps = specific floor actions.\n' +
-  '- Avoid corporate filler and invented KPIs (see PRIORITY).\n\n' +
-  'EXAMPLE TONE (structure only—do not copy if it does not match the user’s topic):\n' +
-  '"Your APS is low, which means you’re not getting enough customers to the tablet. That tells me opportunities are walking by without an eligibility check. Today, focus on stopping every customer in your area and getting them to eligibility before they leave electronics."\n\n'
+  '- Retail wireless Team Lead → Mobile Expert: human, specific, brief.\n' +
+  '- Sections stack without repeating the same story—each section adds something new or sharper.\n\n'
 
 const COACHING_PROMPT =
   COACHING_PRIORITY +
+  COACHING_NATURAL_VOICE +
   'You are an experienced retail wireless Team Lead writing a CORRECTIVE COACHING form (mode coaching only).\n' +
   'Default context when it fits the user’s topic: phones, plans, postpaid activations, eligibility checks on the tablet, accessories, store traffic, Mobile Experts on the sales floor — use only what the user’s words imply; never invent KPIs or incidents.\n\n' +
   RETAIL_WIRELESS_METRIC_DEFINITIONS +
@@ -324,8 +387,8 @@ const COACHING_PROMPT =
   COACHING_BUSINESS_OUTCOMES +
   COACHING_STRUCTURE_AND_TONE +
   'VOICE & STAY ON TOPIC:\n' +
-  '- Professional, direct, slightly conversational; first-person where it fits ("I expect...", "We need to see...").\n' +
-  '- Anchor to coachingReason and notes; polish like a real manager. Add only closely related context for the SAME topic.\n' +
+  '- Conversational Team Lead first—plain talk, not polished HR prose.\n' +
+  '- Anchor to coachingReason and notes; add only closely related context for the SAME topic.\n' +
   '- Do not invent problems, customers, incidents, numbers, or details not implied by the user.\n' +
   '- Sales/metrics/engagement/closing only if the input is about sales or performance; attendance only if about attendance; keys/security only if about security or policy.\n\n' +
   'TOPIC_HINT in the system message is only to nudge Coaching Category and tone—it is not extra content to paste. Every section must still reflect the user’s actual words.\n\n' +
@@ -336,19 +399,17 @@ const COACHING_PROMPT =
   'OUTPUT SHAPE:\n' +
   '- Exact section titles and order below. Plain text, paste-ready. No ## markdown or bold titles.\n\n' +
   'LENGTH:\n' +
-  '- Prose: 1–2 short sentences per section; Behavior at most 2 sentences.\n' +
-  '- Next Steps: 2–3 bullets.\n\n' +
+  '- Default: ONE tight sentence per section when possible (two only if truly needed). Behavior often one sentence.\n' +
+  '- Next Steps: 2–3 very short bullets (a few words each is fine).\n' +
+  '- Overall output ~35–40% shorter than a typical formal write-up—trim relentlessly.\n\n' +
   'NUMBERS / KPIs:\n' +
   '- If the user gave numbers, use them directly and specifically (example shape: "You recorded X while goal was Y").\n' +
   '- If numbers are present, keep them grounded to the actual input and do not invent additional metrics.\n\n' +
-  'ACCOUNTABILITY (required):\n' +
-  '- Clearly state what happened, what was expected, and what needs to change.\n' +
-  '- Include a direct expectation statement in Next Steps and/or Manager Follow-Up (example shape: "Going forward, I expect...").\n\n' +
-  'AVOID these vague phrases:\n' +
-  '- "indicates a need for improvement"\n' +
-  '- "below expectations"\n' +
-  '- "focus on improvement"\n' +
-  'Use explicit language instead: what happened, expected standard, required change.\n\n' +
+  'CLEAR EXPECTATIONS (without sounding like HR):\n' +
+  '- Say what needs to shift in plain language—short bullets or one simple sentence.\n' +
+  '- Prefer “need you to,” “try to,” “let’s keep,” “keep an eye on” over formal mandate tone unless the issue is severe.\n\n' +
+  'AVOID these vague AI / HR phrases:\n' +
+  '- "indicates a need for improvement", "below expectations", "focus on improvement"\n\n' +
   'Also avoid stiff corporate phrasing ("leverage," "moving forward," "align on expectations").\n\n' +
   'SENTENCES: Title-case employeeName from JSON; bullet lines start with a capital letter. Complete sentences only.\n\n' +
   'SECTIONS — exact titles, this order. Nothing before "Pre-Coaching Notes:":\n' +
@@ -360,13 +421,13 @@ const COACHING_PROMPT =
   'Next Steps:\n' +
   'Manager Follow-Up:\n\n' +
   'SECTION GUIDANCE:\n' +
-  'Pre-Coaching Notes: Open with the employee’s name; frame the issue clearly from their input. If numbers/goal context exists, put the specific actual vs expected here.\n' +
-  'Coaching Category: One natural line aligned with the topic they raised.\n' +
-  'Situation: State what happened in plain manager language, tied to the input.\n' +
-  'Behavior: State the observed behavior and the expected behavior/standard.\n' +
-  'Impact: Explain concrete impact tied to the same issue (no unrelated domains). For sales/performance topics, spell out how this affects activations, goals, earning opportunity, or idle gaps between sales—when justified by the input.\n' +
-  'Next Steps: Practical, actionable bullets tied directly to the issue and expectation.\n' +
-  'Manager Follow-Up: Include timing and a direct expectation statement ("I expect...").\n\n' +
+  'Pre-Coaching Notes: Name first; conversational opener optional (“just wanted to mention…”). Put the concrete facts/metrics here OR in Situation—not both in full detail.\n' +
+  'Coaching Category: One short natural label.\n' +
+  'Situation: Plain facts of what occurred—minimal repetition of Pre-Coaching Notes.\n' +
+  'Behavior: What you need from them going forward—often one sentence; no copy-paste of Situation.\n' +
+  'Impact: One short beat on why it matters—do not reuse banned phrases or repeat metrics.\n' +
+  'Next Steps: Short bullets; each bullet adds a distinct action.\n' +
+  'Manager Follow-Up: Brief and human (e.g. quick follow-up, check-in later)—not a second lecture.\n\n' +
   'Layout example:\n' +
   SECTION_SHAPE
 
@@ -403,8 +464,8 @@ const RECOGNITION_PROMPT =
   SECTION_SHAPE
 
 const COACHING_USER_PREFIX =
-  'TASK: Write the full coaching form. Stay anchored to coachingReason and notes; polished but not generic.\n' +
-  'Optional notes are authoritative for tone: phrases like “just a reminder,” “friendly reminder,” “not a write-up,” “light coaching,” or “verbal reminder” mean a SHORT alignment reminder—not a disciplinary coaching document. Match that intent in every section.\n' +
+  'TASK: Write the full coaching form. Stay anchored to coachingReason and notes—human and concise, not polished corporate copy.\n' +
+  'Optional notes are authoritative for tone: “just a reminder,” “friendly reminder,” “not a write-up,” “light coaching,” “verbal reminder,” “not serious,” or “no break schedule” → REMINDER_MODE softness (see system message): short, conversational, zero disciplinary / write-up tone.\n' +
   'Decide whether the user is focused on metrics (APS/HPA/MPT) or a behavioral scenario (or both), and follow the matching rules in the system message.\n' +
   'If the topic is about floor performance or selling, connect behavior to outcomes (goals, activations, commission opportunity, gaps between sales) as described under BUSINESS OUTCOMES—without inventing numbers.\n' +
   'If the JSON references APS, HPA, or MPT, use ONLY the retail wireless metric definitions from the system message—do not guess what those letters mean.\n' +
@@ -417,22 +478,21 @@ const REMINDER_COACHING_MODE =
   'REMINDER_MODE (this request):\n' +
   'The user message includes REMINDER_MODE: true. These instructions OVERRIDE conflicting coaching tone, length, and accountability rules elsewhere in this system message.\n\n' +
   'INTENT:\n' +
-  '- Write a quick floor alignment REMINDER. This is not a formal write-up or heavy corrective document.\n' +
-  '- Professional, warm, and brief—like a short check-in.\n\n' +
+  '- Quick heads-up / alignment reminder—NOT a write-up, NOT disciplinary, NOT HR tone.\n' +
+  '- Much softer than default coaching: if notes say “not serious” or “light coaching,” keep it casual and brief.\n\n' +
+  'If notes include “no break schedule”: do NOT lecture about a rigid break schedule or formal schedule rules—keep guidance general (“keep break timing reasonable,” “watch how breaks fall during the shift”).\n\n' +
   'STRICTLY AVOID (and close variants):\n' +
-  '- Words/phrases: compliance, policy violation, disciplinary, corrective action, disrupt productivity, undermine, performance improvement plan, PIP.\n' +
-  '- Harsh expectation phrasing: “I expect,” “we expect,” “expect to see” (use softer wording: “going forward, please…,” “let’s keep…,” “I’ll check in…”).\n' +
-  '- “Expected schedule” / “break schedule” is fine when describing timing neutrally.\n\n' +
-  'LENGTH & SHAPE:\n' +
-  '- Same section titles and order as the main prompt.\n' +
-  '- Every section: 1–2 SHORT sentences (one sentence is OK for Behavior or Impact).\n' +
-  '- Next Steps: 2–3 concise bullets.\n' +
-  '- Coaching Category: light label (e.g. “Attendance / Break Reminder”)—never “Policy Violation” or disciplinary framing.\n\n' +
-  'CONTENT:\n' +
-  '- Pre-Coaching Notes: open with the employee’s name; mirror reminder language from notes when present; state the facts from coachingReason plainly.\n' +
-  '- Situation / Behavior: neutral, factual, forward-looking—no scolding.\n' +
-  '- Impact: light “why it helps the team” (coverage, rhythm, consistency)—no doom framing.\n' +
-  '- Manager Follow-Up: supportive (e.g. will monitor lightly / check in if something needs adjusting)—not threatening.\n'
+  '- compliance, policy violation, disciplinary, corrective action, formal investigation, PIP, monitor lightly, maintain team coverage, consistent rhythm on the floor, moving forward, adhere to expectations, ensure alignment.\n' +
+  '- “I expect,” “we expect,” “expect to see,” “must comply.”\n\n' +
+  'LENGTH:\n' +
+  '- Even shorter than normal coaching (see ~35–40% reduction goal). Often ONE sentence per section.\n' +
+  '- Say concrete details ONCE (Pre-Coaching Notes or Situation); do not repeat break counts in every section.\n\n' +
+  'STYLE EXAMPLE (shape only—use real names/facts from JSON):\n' +
+  '- Pre-Coaching Notes: “Name, just wanted to mention [topic]. [facts].”\n' +
+  '- Behavior: “Not a huge issue—just try to [simple ask].”\n' +
+  '- Impact: one short line on coverage or team flow—plain English.\n' +
+  '- Manager Follow-Up: “Just a quick reminder conversation” or similar—minimal.\n\n' +
+  'Coaching Category: light label (e.g. “Attendance / Break Reminder”).\n'
 
 const RECOGNITION_USER_PREFIX =
   'TASK: Recognition form only. 100% positive reinforcement. You are NOT writing coaching.\n' +
@@ -456,8 +516,8 @@ async function callOpenAIChat(chatMessages) {
     const completion = await openai.chat.completions.create({
       model: MODEL,
       messages: chatMessages,
-      temperature: 0.52,
-      max_tokens: 1300,
+      temperature: 0.58,
+      max_tokens: 900,
     })
 
     const text = completion.choices[0]?.message?.content?.trim()
@@ -533,7 +593,7 @@ function buildCoachingLogMessages(action, payload) {
     (mode === 'coaching'
       ? `ISSUE_TOPIC_HINT (for category/tone only; content must come from JSON): ${issuePrimary}\n` +
         (reminderTone
-          ? 'REMINDER_MODE: true — notes call for a light reminder / informal alignment (not a formal write-up). Follow REMINDER_MODE rules at the end of the system message.\n'
+          ? 'REMINDER_MODE: true — notes/reason call for a light reminder (e.g. just a reminder, not serious, light coaching, no break schedule). Follow REMINDER_MODE at the end of the system message.\n'
           : '')
       : '') +
     'Copy-paste clean plain text. No fragments or cut-off endings.\n\n' +
@@ -548,6 +608,7 @@ function buildCoachingLogMessages(action, payload) {
 }
 
 const app = express()
+app.set('trust proxy', 1)
 
 /**
  * Vite output is `dist/` (`npm run build`). On Render, cwd is usually the service root, but we also
@@ -618,7 +679,7 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
     return res.status(400).send(`Webhook Error: ${msg}`)
   }
 
-  console.log('[webhook/stripe] event type:', event.type)
+  console.log('[webhook/stripe] event type:', event.type, 'id:', event.id)
 
   try {
     if (event.type === 'checkout.session.completed') {
@@ -630,8 +691,16 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
           ? session.metadata.userId
           : null
 
-      console.log('[webhook/stripe] checkout session id:', session.id)
-      console.log('[webhook/stripe] checkout metadata.userId:', metadataUserId ?? '(missing)')
+      console.log('[webhook/stripe] checkout.session.completed', {
+        sessionId: session.id,
+        mode: session.mode ?? null,
+        metadataUserId: metadataUserId ?? '(missing)',
+        subscriptionId: subscriptionId ?? '(missing)',
+      })
+
+      if (session.mode && session.mode !== 'subscription') {
+        console.warn('[webhook/stripe] checkout session mode is not subscription:', session.mode)
+      }
 
       if (!customerId || !subscriptionId) {
         console.error(
@@ -647,30 +716,84 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
         subscription,
         metadataUserId,
       })
-      return res.status(200).json({ received: true, result })
+      return respondStripeWebhookSync(res, event.type, result)
     }
 
-    if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
+    if (
+      event.type === 'customer.subscription.created' ||
+      event.type === 'customer.subscription.updated' ||
+      event.type === 'customer.subscription.deleted'
+    ) {
       const subscription = event.data.object
       const customerId = pickStripeId(subscription.customer)
+      const metadataUserId =
+        subscription.metadata && typeof subscription.metadata.userId === 'string'
+          ? subscription.metadata.userId
+          : null
       if (!customerId) {
-        console.error('[webhook/stripe] subscription event missing customer id')
+        console.error('[webhook/stripe] subscription event missing customer id', event.type)
         return res.status(200).json({ received: true, skipped: 'missing_customer_id' })
+      }
+
+      if (event.type === 'customer.subscription.deleted') {
+        console.log('[webhook/stripe] subscription deleted / ended', {
+          subscriptionId: subscription.id,
+          status: subscription.status ?? null,
+        })
+      }
+
+      if (subscription.status === 'past_due') {
+        console.warn('[webhook/stripe] subscription past_due — syncing is_pro=false (no grace)', {
+          subscriptionId: subscription.id,
+        })
       }
 
       const result = await syncSubscriptionToUser({
         eventType: event.type,
         customerId,
         subscription,
-        metadataUserId: null,
+        metadataUserId,
       })
-      return res.status(200).json({ received: true, result })
+      return respondStripeWebhookSync(res, event.type, result)
     }
 
-    if (event.type === 'invoice.paid' || event.type === 'invoice.payment_failed') {
+    if (
+      event.type === 'invoice.paid' ||
+      event.type === 'invoice.payment_succeeded' ||
+      event.type === 'invoice.payment_failed'
+    ) {
       const invoice = event.data.object
       const customerId = pickStripeId(invoice.customer)
       const subscriptionId = pickStripeId(invoice.subscription)
+      const billingReason = typeof invoice.billing_reason === 'string' ? invoice.billing_reason : null
+
+      const isPaidEvent = event.type === 'invoice.paid' || event.type === 'invoice.payment_succeeded'
+
+      if (isPaidEvent && billingReason === 'subscription_cycle') {
+        console.log('[webhook/stripe] RENEWAL invoice paid (subscription_cycle)', {
+          eventType: event.type,
+          invoiceId: invoice.id,
+          subscriptionId,
+          amountPaid: invoice.amount_paid ?? null,
+          periodEnd: invoice.lines?.data?.[0]?.period?.end ?? null,
+        })
+      } else if (isPaidEvent) {
+        console.log('[webhook/stripe] invoice paid', {
+          eventType: event.type,
+          invoiceId: invoice.id,
+          billingReason,
+          subscriptionId,
+        })
+      } else {
+        console.warn('[webhook/stripe] invoice.payment_failed — renewal or charge failed; subscription will sync (past_due => is_pro false)', {
+          invoiceId: invoice.id,
+          subscriptionId,
+          billingReason,
+          attemptCount: invoice.attempt_count ?? null,
+          nextPaymentAttempt: invoice.next_payment_attempt ?? null,
+        })
+      }
+
       if (!customerId || !subscriptionId) {
         console.error('[webhook/stripe] invoice event missing customer or subscription id')
         return res.status(200).json({ received: true, skipped: 'missing_customer_or_subscription' })
@@ -681,21 +804,39 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
         eventType: event.type,
         customerId,
         subscription,
-        metadataUserId: null,
+        metadataUserId:
+          subscription.metadata && typeof subscription.metadata.userId === 'string'
+            ? subscription.metadata.userId
+            : null,
       })
-      return res.status(200).json({ received: true, result })
+      return respondStripeWebhookSync(res, event.type, result)
     }
   } catch (err) {
     const message = typeof err?.message === 'string' ? err.message : 'webhook handling failed'
-    console.error('[webhook/stripe] Handler error:', message)
-    return res.status(200).json({ received: true, handlerError: message })
+    console.error('[webhook/stripe] Handler EXCEPTION — returning 500 for Stripe retry:', message, err)
+    return res.status(500).json({ received: false, handlerError: message })
   }
 
-  return res.status(200).json({ received: true })
+  console.log('[webhook/stripe] unhandled event type (noop):', event.type)
+  return res.status(200).json({ received: true, unhandled: event.type })
 })
 
 app.use(cors({ origin: true }))
 app.use(express.json({ limit: '256kb' }))
+
+const apiAiRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (_req, res) => {
+    res.status(429).json({
+      ok: false,
+      code: 'RATE_LIMIT',
+      error: 'Too many requests. Please try again in a few minutes.',
+    })
+  },
+})
 
 /**
  * @param {import('express').Request} req
@@ -728,7 +869,7 @@ async function getAuthenticatedUserId(req) {
 async function getProfileForUser(userId) {
   const { data, error } = await supabaseAdmin
     .from('profiles')
-    .select('id, is_pro, usage_count')
+    .select('id, is_pro, usage_count, subscription_status, current_period_end')
     .eq('id', userId)
     .maybeSingle()
   if (error || !data) {
@@ -737,15 +878,15 @@ async function getProfileForUser(userId) {
   return { profile: data, error: null }
 }
 
-function usageEnvelope(profile) {
+function usageEnvelope(profile, authEmail) {
   const raw = Number(profile?.usage_count ?? 0)
   const usageCount = Number.isFinite(raw) ? Math.trunc(raw) : 0
-  const isPro = Boolean(profile?.is_pro)
+  const isPro = effectivePremiumAccess(profile, authEmail)
   const remaining = isPro ? Number.POSITIVE_INFINITY : FREE_LIMIT - usageCount
   return { usageCount, isPro, remaining, freeLimit: FREE_LIMIT }
 }
 
-async function recordServerSideGenerationUsage(userId) {
+async function recordServerSideGenerationUsage(userId, authEmail) {
   if (!supabaseAdmin) return
   const profileResult = await getProfileForUser(userId)
   if (!profileResult.profile || profileResult.error) {
@@ -753,8 +894,8 @@ async function recordServerSideGenerationUsage(userId) {
     return null
   }
   const profile = profileResult.profile
-  if (profile.is_pro) {
-    const snapshot = usageEnvelope(profile)
+  if (effectivePremiumAccess(profile, authEmail)) {
+    const snapshot = usageEnvelope(profile, authEmail)
     debugLog('SERVER_USAGE_APPLY', {
       userId,
       isPro: true,
@@ -831,6 +972,9 @@ app.post('/create-checkout-session', async (req, res) => {
       cancel_url: `${appUrl}`,
       metadata: checkoutMetadata,
       client_reference_id: userId,
+      subscription_data: {
+        metadata: { userId },
+      },
     })
     if (!session.url) {
       return res.status(500).json({ error: 'Checkout session missing URL.' })
@@ -978,10 +1122,80 @@ async function handleCreateCustomerPortalSession(req, res) {
   }
 }
 
+/**
+ * Authenticated: re-fetch subscription from Stripe and sync profiles (webhook backup).
+ */
+async function handleBillingReconcileSubscription(req, res) {
+  if (!stripe) {
+    return res.status(503).json({ ok: false, error: 'Stripe is not configured.' })
+  }
+  const auth = await getAuthenticatedUserId(req)
+  if (auth.error || !auth.userId) {
+    return res.status(401).json({ ok: false, error: auth.error || 'Unauthorized.' })
+  }
+  const force =
+    req.query?.force === '1' ||
+    req.query?.force === 'true' ||
+    (req.body && typeof req.body === 'object' && req.body.force === true)
+  console.log('[billing-reconcile] HTTP request', { userId: auth.userId, force: Boolean(force) })
+  const result = await reconcileStripeSubscriptionForUser(auth.userId, { force })
+  if (!result.ok && result.skipped === 'cooldown') {
+    return res.json({ ok: true, skipped: 'cooldown' })
+  }
+  if (!result.ok && result.skipped === 'no_stripe_subscription') {
+    return res.json({ ok: true, skipped: 'no_stripe_subscription' })
+  }
+  if (!result.ok) {
+    const code = result.skipped === 'stripe_retrieve_error' || result.skipped === 'stripe_list_error' ? 502 : 500
+    return res.status(code).json({ ok: false, ...result })
+  }
+  return res.json({ ok: true, result })
+}
+
+/**
+ * Dev/admin: resync every profile that has Stripe IDs (header secret).
+ * Set TRACKORA_BILLING_RESYNC_SECRET in the server environment.
+ */
+async function handleBillingAdminResyncAll(req, res) {
+  const secret = process.env.TRACKORA_BILLING_RESYNC_SECRET?.trim()
+  if (!secret) {
+    return res.status(503).json({ ok: false, error: 'TRACKORA_BILLING_RESYNC_SECRET is not set.' })
+  }
+  const headerSecret =
+    (typeof req.headers['x-trackora-billing-resync-secret'] === 'string'
+      ? req.headers['x-trackora-billing-resync-secret'].trim()
+      : '') || (typeof req.body?.secret === 'string' ? req.body.secret.trim() : '')
+  if (headerSecret !== secret) {
+    console.warn('[billing-admin-resync] unauthorized attempt')
+    return res.status(401).json({ ok: false, error: 'Unauthorized.' })
+  }
+  if (!stripe || !supabaseAdmin) {
+    return res.status(503).json({ ok: false, error: 'Stripe or Supabase not configured.' })
+  }
+  const dryRun = req.body?.dryRun === true || req.query?.dryRun === '1'
+  console.log('[billing-admin-resync] starting', { dryRun })
+  try {
+    const summary = await resyncAllProfilesFromStripe(stripe, supabaseAdmin, {
+      dryRun,
+      onProgress: (e) => {
+        if (e.error || e.updated) console.log('[billing-admin-resync]', e)
+      },
+    })
+    console.log('[billing-admin-resync] done', summary)
+    return res.json({ ok: true, summary })
+  } catch (e) {
+    const msg = typeof e?.message === 'string' ? e.message : 'resync failed'
+    console.error('[billing-admin-resync] fatal', msg)
+    return res.status(500).json({ ok: false, error: msg })
+  }
+}
+
 app.post('/api/create-customer-portal-session', handleCreateCustomerPortalSession)
 app.post('/create-billing-portal-session', handleCreateCustomerPortalSession)
+app.post('/api/billing/reconcile-subscription', handleBillingReconcileSubscription)
+app.post('/api/billing/admin/resync-all', handleBillingAdminResyncAll)
 
-app.post('/api/ai', async (req, res) => {
+app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
   debugLog('SERVER_API_AI_HIT')
   const authHeader = req.headers.authorization
   if (!authHeader || typeof authHeader !== 'string') {
@@ -1018,8 +1232,10 @@ app.post('/api/ai', async (req, res) => {
       return res.status(500).json({ ok: false, error: profileResult.error || 'Could not load profile.' })
     }
     const profile = profileResult.profile
-    usageSnapshot = usageEnvelope(profile)
-    const shouldBlock = !profile.is_pro && usageSnapshot.usageCount >= FREE_LIMIT
+    usageSnapshot = usageEnvelope(profile, authUserEmail)
+    /** Effective Pro: Stripe active/trialing or owner allowlist (see shared/ownerFreePro.mjs). */
+    const hasProAccess = usageSnapshot.isPro
+    const shouldBlock = !hasProAccess && usageSnapshot.usageCount >= FREE_LIMIT
     debugLog('SERVER_API_AI_USAGE_CHECK', {
       userId: authUserId,
       isPro: usageSnapshot.isPro,
@@ -1029,7 +1245,7 @@ app.post('/api/ai', async (req, res) => {
       remaining: usageSnapshot.remaining,
       shouldBlock,
     })
-    const freeLimitReached = !profile.is_pro && usageSnapshot.usageCount >= FREE_LIMIT
+    const freeLimitReached = !hasProAccess && usageSnapshot.usageCount >= FREE_LIMIT
     if (!isTutorialRun && freeLimitReached) {
       return res.status(403).json({ ok: false, code: 'FREE_LIMIT_REACHED', error: 'Free limit reached' })
     }
@@ -1062,8 +1278,8 @@ app.post('/api/ai', async (req, res) => {
         mode: payloadForAi?.mode,
       })
       if (!isTutorialRun && authUserId) {
-        const updated = await recordServerSideGenerationUsage(authUserId)
-        if (updated) usageSnapshot = usageEnvelope(updated)
+        const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
+        if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
       return res.json({
         ok: true,
@@ -1110,8 +1326,8 @@ app.post('/api/ai', async (req, res) => {
         issuePrimary,
       })
       if (action === 'coaching_log' && !isTutorialRun && authUserId) {
-        const updated = await recordServerSideGenerationUsage(authUserId)
-        if (updated) usageSnapshot = usageEnvelope(updated)
+        const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
+        if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
       return res.json({
         ok: true,
@@ -1134,8 +1350,8 @@ app.post('/api/ai', async (req, res) => {
         mode: payloadForAi?.mode,
       })
       if (!isTutorialRun && authUserId) {
-        const updated = await recordServerSideGenerationUsage(authUserId)
-        if (updated) usageSnapshot = usageEnvelope(updated)
+        const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
+        if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
     }
     return res.json({
@@ -1165,8 +1381,8 @@ app.post('/api/ai', async (req, res) => {
         error: message,
       })
       if (!isTutorialRun && authUserId) {
-        const updated = await recordServerSideGenerationUsage(authUserId)
-        if (updated) usageSnapshot = usageEnvelope(updated)
+        const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
+        if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
       return res.json({
         ok: true,

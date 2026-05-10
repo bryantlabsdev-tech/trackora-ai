@@ -264,6 +264,8 @@ export function buildDeterministicCoachingForm(payload) {
  */
 function buildLightReminderDeterministicForm(name, reason, notes, primary) {
   const extra = stripToneOnlyNotes(notes)
+  const hay = `${reason} ${notes}`.toLowerCase()
+  const noBreakSchedule = hay.includes('no break schedule')
   const breakTopic = /\bbreak\b|\blunch\b|\bclock\b/i.test(`${reason} ${notes}`)
 
   const category = (() => {
@@ -275,45 +277,54 @@ function buildLightReminderDeterministicForm(name, reason, notes, primary) {
     return 'Coaching Reminder'
   })()
 
+  const r = reason.endsWith('.') ? reason : `${reason}.`
   let pre
   if (primary === 'attendance' && breakTopic) {
-    pre = `${name}, this is just a quick reminder to make sure breaks stay aligned with the expected schedule. ${reason.endsWith('.') ? reason : `${reason}.`}`
+    pre = `${name}, just wanted to mention the break timing from today. ${r}`
   } else {
-    const r = reason.endsWith('.') ? reason : `${reason}.`
-    pre = `${name}, this is just a quick reminder to stay aligned on the floor. ${r}`
+    pre = `${name}, just wanted to bring this up. ${r}`
   }
   if (extra) {
     pre += ` ${extra.endsWith('.') ? extra : `${extra}.`}`
   }
 
-  const situation = reason.endsWith('.') ? reason : `${reason}.`
+  const situation = r
 
   let behavior
   if (primary === 'attendance' && breakTopic) {
-    behavior = `Moving forward, please keep paid breaks within the expected break schedule and make sure lunches continue to be clocked out properly.`
+    if (noBreakSchedule) {
+      behavior = `Not a huge issue—just try to keep break timing reasonable and clock lunch the way we usually run it on the floor.`
+    } else {
+      behavior = `Not a huge issue—just try to keep breaks reasonable throughout the day and clock lunch out like we talked about.`
+    }
+  } else if (primary === 'compliance_security') {
+    behavior = `Wanted to make sure we keep this cleaned up going ahead—nothing wild, just stay on top of it.`
   } else {
-    behavior = `Moving forward, please keep this aligned with team expectations, and reach out if you need support or a schedule tweak.`
+    behavior = `Not a huge issue—just try to tighten this up based on what we went over.`
   }
 
   let impact
   if (primary === 'attendance') {
-    impact = `Keeping breaks and schedules consistent helps protect coverage and keeps the team running smoothly.`
+    impact = `Helps us keep coverage balanced for everyone.`
   } else if (primary === 'compliance_security') {
-    impact = `Staying consistent with procedures keeps everyone safe and the day running smoothly.`
+    impact = `Keeps the day smooth and everyone on the same page.`
   } else if (primary === 'performance_sales') {
-    impact = `Small alignments on the floor help the team stay on track together.`
+    impact = `Helps the shift run cleaner when we stay on top of this.`
   } else {
-    impact = `Staying aligned helps the team operate smoothly day to day.`
+    impact = `Keeps things running smoother for the team.`
   }
 
   let nextSteps
   if (primary === 'attendance' && breakTopic) {
-    nextSteps = `• Keep paid breaks within the expected break schedule.\n• Continue clocking out for lunch.\n• Reach out if you need help adjusting your schedule.`
+    nextSteps = `• Keep an eye on break timing\n• Reach out if scheduling gets messy`
+    if (!noBreakSchedule) {
+      nextSteps += `\n• Clock out for lunch like usual`
+    }
   } else {
-    nextSteps = `• Stay aligned with what we discussed.\n• Ask if you need clarity on expectations.\n• Let me know if your schedule needs a tweak.`
+    nextSteps = `• Keep an eye on what we discussed\n• Flag me if something’s getting in the way`
   }
 
-  const followUp = `I'll continue to monitor and check in if anything needs to be adjusted.`
+  const followUp = `Just a quick reminder conversation.`
 
   return joinSections(pre, category, situation, behavior, impact, nextSteps, followUp)
 }

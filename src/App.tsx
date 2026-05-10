@@ -20,15 +20,17 @@ function SupabaseConfigMissing() {
     <div className="auth-screen">
       <div className="auth-card card">
         <p className="eyebrow">Trackora</p>
-        <h1 className="auth-title">Supabase not configured</h1>
-        <p className="auth-subtitle">Add these to your project <code>.env</code> and restart the dev server:</p>
+        <h1 className="auth-title">Sign-in isn&apos;t configured</h1>
+        <p className="auth-subtitle">
+          For local development, add these to your project <code>.env</code> and restart the dev server:
+        </p>
         <p className="auth-config-hint">
           <code>VITE_SUPABASE_URL</code>
           <br />
           <code>VITE_SUPABASE_PUBLISHABLE_KEY</code>
         </p>
         <p className="auth-config-hint" style={{ marginTop: '1rem' }}>
-          Use the project URL and anon public key from the Supabase dashboard (Settings → API).
+          Use the URL and publishable key from your hosted auth provider&apos;s dashboard.
         </p>
       </div>
     </div>

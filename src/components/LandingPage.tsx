@@ -3,7 +3,7 @@ import '../landing.css'
 import { useMemo, useState } from 'react'
 
 /** Canonical hero line — this is what localhost:5173 must show for `/` (signed out). */
-export const LANDING_HERO_HEADLINE = 'Stop wasting 20 minutes writing coaching forms after every shift'
+export const LANDING_HERO_HEADLINE = 'Create professional coaching and recognition forms in seconds'
 
 type PreviewResult = {
   summary: string
@@ -104,12 +104,13 @@ export default function LandingPage() {
 
       <main>
         <section className="landing-hero">
-          <p className="landing-eyebrow">AI coaching forms for leaders</p>
+          <p className="landing-eyebrow">For retail leaders and fast-moving teams</p>
           <h1 className="landing-hero-title">{LANDING_HERO_HEADLINE}</h1>
           <p className="landing-hero-lead">
-            Type what happened. TrackoraAI instantly turns it into a clean, professional coaching form in
-            seconds.
+            Describe the moment. TrackoraAI returns clear, manager-ready documentation you can use the same
+            shift — no blank page, no second-guessing the wording.
           </p>
+          <p className="landing-hero-trust-ribbon">Built for retail leaders and fast-moving teams.</p>
 
           <div className="landing-hero-demo" aria-label="Demo: user types input and AI generates a coaching form">
             <div className="landing-hero-demo-window">

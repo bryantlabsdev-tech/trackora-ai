@@ -10,6 +10,8 @@ const REMINDER_NEEDLES = [
   'not a write-up',
   'light coaching',
   'verbal reminder',
+  'not serious',
+  'no break schedule',
 ]
 
 /**
@@ -51,6 +53,14 @@ export function stripToneOnlyNotes(notes) {
     'not a write up.',
     'not a write-up',
     'not a write-up.',
+    'not serious',
+    'not serious.',
+    'no break schedule',
+    'no break schedule.',
+    'not serious',
+    'not serious.',
+    'this is not serious',
+    'this is not serious.',
   ])
   if (only.has(low)) return ''
   return n

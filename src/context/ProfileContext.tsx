@@ -2,11 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   ensureProfileRow,
+  fetchProfile,
   markPaywallSeen,
   markTutorialSeen,
+  reconcileStripeSubscription,
   resetTutorialForReplay,
 } from '../lib/profileApi'
-import { FREE_AI_GENERATION_LIMIT, type Profile } from '../types/profile'
+import { FREE_AI_GENERATION_LIMIT, hasPremiumAccess, type Profile } from '../types/profile'
 
 type ProfileContextValue = {
   profile: Profile | null
@@ -60,17 +62,24 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
 
   const refresh = useCallback(async () => {
     setError(null)
-    const ensured = await ensureProfileRow(client, userId, email)
+    let ensured = await ensureProfileRow(client, userId, email)
     if (!ensured) {
       setProfile(null)
       setError('Could not load your profile.')
       setLoading(false)
       return
     }
+    if (ensured.stripe_customer_id?.trim() || ensured.stripe_subscription_id?.trim()) {
+      await reconcileStripeSubscription(client)
+      const refreshed = await fetchProfile(client, userId)
+      if (refreshed) ensured = refreshed
+    }
     const shadow = readUsageShadow()
     const mergedUsage =
-      ensured.is_pro || shadow == null ? ensured.usage_count : Math.min(FREE_AI_GENERATION_LIMIT, Math.max(ensured.usage_count, shadow))
-    if (!ensured.is_pro && mergedUsage > ensured.usage_count && import.meta.env.DEV) {
+      hasPremiumAccess(ensured) || shadow == null
+        ? ensured.usage_count
+        : Math.min(FREE_AI_GENERATION_LIMIT, Math.max(ensured.usage_count, shadow))
+    if (!hasPremiumAccess(ensured) && mergedUsage > ensured.usage_count && import.meta.env.DEV) {
       console.log('[usage] applying local shadow count while waiting for server sync:', mergedUsage)
     }
     setProfile({ ...ensured, usage_count: mergedUsage })
