@@ -5,6 +5,7 @@
 
 import { formatPersonName } from './coachingOutput.mjs'
 import { isLightReminderCoaching, stripToneOnlyNotes } from './coachingReminderTone.mjs'
+import { parseCoachingWorkspace } from './coachingWorkspace.mjs'
 
 /** @typedef {'compliance_security' | 'attendance' | 'performance_sales' | 'recognition_positive' | 'unspecified'} IssuePrimary */
 
@@ -184,6 +185,7 @@ export function leakTestForbiddenTerms(primary, mode) {
  */
 export function buildDeterministicCoachingForm(payload) {
   const mode = payload?.mode === 'recognition' ? 'recognition' : 'coaching'
+  const workspace = parseCoachingWorkspace(payload?.coachingWorkspace)
   const blob = normalizeIssueText(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`)
   const { primary } = classifyIssue(blob, mode)
   const rawName = String(payload?.employeeName ?? '')
@@ -206,7 +208,7 @@ export function buildDeterministicCoachingForm(payload) {
   }
 
   if (isLightReminderCoaching(notes, reason)) {
-    return buildLightReminderDeterministicForm(name, reason, notes, primary)
+    return buildLightReminderDeterministicForm(name, reason, notes, primary, workspace)
   }
 
   const issueRef = reason.endsWith('.') ? reason.slice(0, -1) : reason
@@ -237,7 +239,10 @@ export function buildDeterministicCoachingForm(payload) {
       const category = `Performance — ${issueRef}.`
       const situation = `${name}, the focus is: ${reason}.`
       const behavior = `Execution needs to line up with what was described—stay specific to that topic.`
-      const impact = `When execution slips on what we track, it affects results the team is responsible for.`
+      const impact =
+        workspace === 'general_workplace'
+          ? `When expectations slip on what we track, it affects team results and trust.`
+          : `When execution slips on what we track, it affects results the team is responsible for.`
       const nextSteps = `• Address the specific gap described above\n• Ask for clarification on expectations if needed\n• Manager check-in to review progress`
       const followUp = `Follow up on the next visit to review progress on the topic discussed.`
       return joinSections(pre, category, situation, behavior, impact, nextSteps, followUp)
@@ -261,8 +266,9 @@ export function buildDeterministicCoachingForm(payload) {
  * @param {string} reason
  * @param {string} notes
  * @param {IssuePrimary} primary
+ * @param {'mobile_sales' | 'general_workplace'} workspace
  */
-function buildLightReminderDeterministicForm(name, reason, notes, primary) {
+function buildLightReminderDeterministicForm(name, reason, notes, primary, workspace) {
   const extra = stripToneOnlyNotes(notes)
   const hay = `${reason} ${notes}`.toLowerCase()
   const noBreakSchedule = hay.includes('no break schedule')
@@ -293,9 +299,15 @@ function buildLightReminderDeterministicForm(name, reason, notes, primary) {
   let behavior
   if (primary === 'attendance' && breakTopic) {
     if (noBreakSchedule) {
-      behavior = `Not a huge issue—just try to keep break timing reasonable and clock lunch the way we usually run it on the floor.`
+      behavior =
+        workspace === 'general_workplace'
+          ? `Not a huge issue—just try to keep break timing reasonable and follow how we usually handle breaks during the workday.`
+          : `Not a huge issue—just try to keep break timing reasonable and clock lunch the way we usually run it on the floor.`
     } else {
-      behavior = `Not a huge issue—just try to keep breaks reasonable throughout the day and clock lunch out like we talked about.`
+      behavior =
+        workspace === 'general_workplace'
+          ? `Not a huge issue—just try to keep breaks reasonable through the day and wrap up meal breaks on time.`
+          : `Not a huge issue—just try to keep breaks reasonable throughout the day and clock lunch out like we talked about.`
     }
   } else if (primary === 'compliance_security') {
     behavior = `Wanted to make sure we keep this cleaned up going ahead—nothing wild, just stay on top of it.`
@@ -309,7 +321,10 @@ function buildLightReminderDeterministicForm(name, reason, notes, primary) {
   } else if (primary === 'compliance_security') {
     impact = `Keeps the day smooth and everyone on the same page.`
   } else if (primary === 'performance_sales') {
-    impact = `Helps the shift run cleaner when we stay on top of this.`
+    impact =
+      workspace === 'general_workplace'
+        ? `Helps the team stay aligned when we stay on top of this.`
+        : `Helps the shift run cleaner when we stay on top of this.`
   } else {
     impact = `Keeps things running smoother for the team.`
   }
@@ -318,7 +333,10 @@ function buildLightReminderDeterministicForm(name, reason, notes, primary) {
   if (primary === 'attendance' && breakTopic) {
     nextSteps = `• Keep an eye on break timing\n• Reach out if scheduling gets messy`
     if (!noBreakSchedule) {
-      nextSteps += `\n• Clock out for lunch like usual`
+      nextSteps +=
+        workspace === 'general_workplace'
+          ? `\n• Return from meal breaks on time`
+          : `\n• Clock out for lunch like usual`
     }
   } else {
     nextSteps = `• Keep an eye on what we discussed\n• Flag me if something’s getting in the way`

@@ -12,10 +12,19 @@ export { isOwnerFreePro } from '../../shared/ownerFreePro.mjs'
 export const PRO_MONTHLY_REFINEMENT_LIMIT = PRO_MONTHLY_REFINEMENT_LIMIT_DEFAULT
 
 /** Row shape from `public.profiles` (Supabase). */
+export type CoachingWorkspace = 'mobile_sales' | 'general_workplace'
+
 export type ProfileRow = {
   id: string
   email: string
   is_pro: boolean
+  /** Preferred coaching mode; defaults to mobile retail for existing accounts. */
+  coaching_workspace: CoachingWorkspace
+  /**
+   * When true, client shows a one-time workspace picker (new accounts). Cleared by `set_coaching_workspace`.
+   * Existing users are migrated to false.
+   */
+  needs_coaching_workspace_setup: boolean
   /** Billing tier; synced from Stripe (Pro vs Elite price) and webhooks. */
   plan_tier: 'free' | 'pro' | 'elite'
   usage_count: number

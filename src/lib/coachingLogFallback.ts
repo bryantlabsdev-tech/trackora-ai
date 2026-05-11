@@ -10,6 +10,7 @@ export function getCoachingLogFallback(payload: CoachingLogApiPayload): string {
     coachingReason: payload.coachingReason.trim(),
     notes: payload.notes.trim(),
     mode: payload.mode,
+    coachingWorkspace: payload.coachingWorkspace,
   })
   return polishGeneratedCoachingForm(draft, rawName)
 }

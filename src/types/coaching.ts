@@ -1,5 +1,9 @@
+import type { CoachingWorkspace } from './profile'
+
 /** Corrective coaching vs positive recognition — same form layout, different tone. */
 export type FormMode = 'coaching' | 'recognition'
+
+export type { CoachingWorkspace } from './profile'
 
 /** Minimal input for coaching form generation. */
 export type SimpleCoachingInput = {
@@ -16,6 +20,7 @@ export type SimpleCoachingInput = {
 /** Payload sent to POST /api/ai. */
 export type CoachingLogApiPayload = SimpleCoachingInput & {
   mode: FormMode
+  coachingWorkspace: CoachingWorkspace
 }
 
 /**
@@ -58,4 +63,5 @@ export type RefineSectionApiPayload = {
   employeeName: string
   /** Coaching topic / “coaching form is for” — keeps refinement on-topic. */
   coachingFor?: string
+  coachingWorkspace: CoachingWorkspace
 }

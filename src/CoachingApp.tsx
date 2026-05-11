@@ -10,6 +10,7 @@ import { usePostTutorialFeedbackNudge } from './context/PostTutorialFeedbackNudg
 import type {
   CoachingFormSectionLabel,
   CoachingLogApiPayload,
+  CoachingWorkspace,
   FormMode,
   RefinePreset,
   SimpleCoachingInput,
@@ -28,6 +29,10 @@ import {
   isOwnerFreePro,
   isProPlan,
 } from './types/profile'
+import { parseCoachingWorkspace } from '../shared/coachingWorkspace.mjs'
+import { persistCoachingWorkspace } from './lib/profileApi'
+import { supabase } from './lib/supabase'
+import { WORKSPACE_LABEL, WORKSPACE_STORAGE_KEY } from './lib/workspaceLabels'
 import {
   copyPlainTextToClipboard,
   formatCoachingFormForClipboard,
@@ -172,8 +177,6 @@ const SESSION_PAYWALL_SHOWN_KEY = 'trackora_paywall_shown_this_session'
 
 /** Free-tier exhausted: headline + body (typographic apostrophe in “You’ve” for web/mobile). */
 const FREE_LIMIT_HEADLINE = 'You\u2019ve reached the free limit'
-const FREE_LIMIT_BODY =
-  'Upgrade to Pro for unlimited coaching form generations, monthly AI section refinements, and professional retail-ready drafts.'
 
 const PAYWALL_PRO_BULLETS = [
   'Unlimited coaching forms',
@@ -256,7 +259,7 @@ type CoachingTopicOption = {
 type CoachingTopicGroup = { groupLabel: string; options: CoachingTopicOption[] }
 
 /** Single source for the Quick coaching topics dropdown; always fills Mobile Expert + reason/notes + mode. */
-const COACHING_TOPIC_GROUPS: CoachingTopicGroup[] = [
+const MOBILE_SALES_COACHING_TOPIC_GROUPS: CoachingTopicGroup[] = [
   {
     groupLabel: 'Metrics & common',
     options: [
@@ -429,9 +432,234 @@ const COACHING_TOPIC_GROUPS: CoachingTopicGroup[] = [
   },
 ]
 
-const COACHING_TOPIC_BY_ID: Record<string, CoachingTopicOption> = Object.fromEntries(
-  COACHING_TOPIC_GROUPS.flatMap((g) => g.options.map((o) => [o.id, o] as const)),
-)
+/** General workplace quick topics — separate catalog from mobile sales. */
+const GENERAL_WORKPLACE_COACHING_TOPIC_GROUPS: CoachingTopicGroup[] = [
+  {
+    groupLabel: 'Workplace essentials',
+    options: [
+      {
+        id: 'wp-attendance',
+        label: 'Attendance',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Attendance / punctuality',
+          notes: 'Dates, pattern, and expectations.',
+        },
+      },
+      {
+        id: 'wp-professionalism',
+        label: 'Professionalism',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Professionalism / conduct',
+          notes: 'What was observed and the standard you expect.',
+        },
+      },
+      {
+        id: 'wp-customer-service',
+        label: 'Customer service',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Customer or guest service',
+          notes: 'Interaction, tone, or resolution issue — be specific.',
+        },
+      },
+      {
+        id: 'wp-teamwork',
+        label: 'Teamwork',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Teamwork / collaboration',
+          notes: 'How it affected handoffs, coverage, or morale.',
+        },
+      },
+      {
+        id: 'wp-accountability',
+        label: 'Accountability',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Accountability / follow-through',
+          notes: 'Missed commitments, incomplete tasks, or ownership gaps.',
+        },
+      },
+      {
+        id: 'wp-communication',
+        label: 'Communication',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Communication',
+          notes: 'Updates, tone, responsiveness, or clarity issues.',
+        },
+      },
+      {
+        id: 'wp-productivity',
+        label: 'Productivity',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Productivity / workload',
+          notes: 'Throughput, deadlines, focus, or prioritization.',
+        },
+      },
+      {
+        id: 'wp-leadership',
+        label: 'Leadership',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Leadership expectations',
+          notes: 'Coaching peers, tone when leading, or delegation.',
+        },
+      },
+      {
+        id: 'wp-policy',
+        label: 'Policy compliance',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Policy / safety compliance',
+          notes: 'Which policy, what happened, and required standard.',
+        },
+      },
+      {
+        id: 'wp-recognition',
+        label: 'Recognition',
+        mode: 'recognition',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Strong contribution — recognition',
+          notes: 'What went well today (service, teamwork, reliability, etc.).',
+        },
+      },
+    ],
+  },
+  {
+    groupLabel: 'More topics',
+    options: [
+      {
+        id: 'wp-uniform',
+        label: 'Dress code / appearance',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Dress code / appearance',
+          notes: 'What was out of standard and the expectation.',
+        },
+      },
+      {
+        id: 'wp-conflict',
+        label: 'Workplace conduct',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Workplace conduct',
+          notes: 'Facts only; keep proportional to the situation described.',
+        },
+      },
+      {
+        id: 'wp-quality',
+        label: 'Quality of work',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Quality of work',
+          notes: 'Errors, rework, or attention to detail.',
+        },
+      },
+      {
+        id: 'wp-safety',
+        label: 'Safety',
+        mode: 'coaching',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Safety concern',
+          notes: 'What was observed and the safe standard.',
+        },
+      },
+      {
+        id: 'wp-recognition-lead',
+        label: 'Recognition: leadership moment',
+        mode: 'recognition',
+        input: {
+          employeeName: 'Team member',
+          coachingReason: 'Leadership moment — recognition',
+          notes: 'How they stepped up for the team.',
+        },
+      },
+    ],
+  },
+]
+
+const WORKSPACE_TOPIC_GROUPS: Record<CoachingWorkspace, CoachingTopicGroup[]> = {
+  mobile_sales: MOBILE_SALES_COACHING_TOPIC_GROUPS,
+  general_workplace: GENERAL_WORKPLACE_COACHING_TOPIC_GROUPS,
+}
+
+function coachingTopicOptionById(workspace: CoachingWorkspace, id: string): CoachingTopicOption | undefined {
+  for (const g of WORKSPACE_TOPIC_GROUPS[workspace]) {
+    const hit = g.options.find((o) => o.id === id)
+    if (hit) return hit
+  }
+  return undefined
+}
+
+function readWorkspaceFromStorage(): CoachingWorkspace | null {
+  try {
+    if (typeof localStorage === 'undefined') return null
+    if (!localStorage.getItem(WORKSPACE_STORAGE_KEY)) return null
+    return parseCoachingWorkspace(localStorage.getItem(WORKSPACE_STORAGE_KEY))
+  } catch {
+    return null
+  }
+}
+
+const WORKSPACE_UI: Record<
+  CoachingWorkspace,
+  {
+    ledePrimary: string
+    ledeTrust: string
+    quickTopicsLabel: string
+    reasonPlaceholder: string
+    notesPlaceholder: string
+    generateButtonIdle: string
+    outputLoadingCaption: string
+    outputEmptySub: string
+    freeLimitBody: string
+  }
+> = {
+  mobile_sales: {
+    ledePrimary: 'Generate professional sales coaching and recognition forms.',
+    ledeTrust: 'Built for retail leaders and fast-moving wireless teams.',
+    quickTopicsLabel: 'Quick coaching topics',
+    reasonPlaceholder: 'e.g. Low APS, high HPA — add numbers in notes',
+    notesPlaceholder: 'Observations, context, numbers…',
+    generateButtonIdle: 'Generate AI Coaching Form',
+    outputLoadingCaption: 'Generating professional coaching form...',
+    outputEmptySub:
+      'Fill out the details and generate a professional coaching or recognition form instantly.',
+    freeLimitBody:
+      'Upgrade to Pro for unlimited coaching form generations, monthly AI section refinements, and professional retail-ready drafts.',
+  },
+  general_workplace: {
+    ledePrimary: 'Generate professional workplace coaching and feedback forms.',
+    ledeTrust: 'Built for supervisors across offices, service, operations, and the floor.',
+    quickTopicsLabel: 'Quick workplace topics',
+    reasonPlaceholder: 'e.g. Late returns from break, missed deadline — add dates in notes',
+    notesPlaceholder: 'Observations, context, policy references…',
+    generateButtonIdle: 'Generate AI Coaching Form',
+    outputLoadingCaption: 'Generating professional workplace coaching form...',
+    outputEmptySub:
+      'Fill out the details and generate a professional coaching or recognition form instantly.',
+    freeLimitBody:
+      'Upgrade to Pro for unlimited coaching form generations, monthly AI section refinements, and professional workplace-ready drafts.',
+  },
+}
 
 /** Premium document headings (parsed section `id` matches model labels). */
 const DOCUMENT_SECTION_DISPLAY: Record<string, string> = {
@@ -528,6 +756,7 @@ export default function CoachingApp() {
   const { triggerPostTutorialFeedbackNudge } = usePostTutorialFeedbackNudge()
   const [input, setInput] = useState<SimpleCoachingInput>(emptyInput)
   const [formMode, setFormMode] = useState<FormMode>('coaching')
+  const [coachingWorkspace, setCoachingWorkspace] = useState<CoachingWorkspace>('mobile_sales')
   const [quickTopicSelection, setQuickTopicSelection] = useState('')
   const [showValidation, setShowValidation] = useState(false)
   const [generationError, setGenerationError] = useState<string | null>(null)
@@ -559,6 +788,27 @@ export default function CoachingApp() {
   const [tutorialDismissBusy, setTutorialDismissBusy] = useState(false)
   const [tutorialDismissError, setTutorialDismissError] = useState<string | null>(null)
   const tutorialDismissBusyRef = useRef(false)
+  const coachingWorkspaceRef = useRef<CoachingWorkspace>(coachingWorkspace)
+  coachingWorkspaceRef.current = coachingWorkspace
+
+  const resetWorkspaceScopedFormState = useCallback(() => {
+    setInput(emptyInput())
+    setFormMode('coaching')
+    setQuickTopicSelection('')
+    setShowValidation(false)
+    setGenerationError(null)
+    setLogText(null)
+    setLogSource(null)
+    setLastGenerationMs(null)
+    setOutputHelpfulness(null)
+    setCopiedSectionKeys({})
+    setRefineOpenRowKey(null)
+    setRefinePresetPick(null)
+    setRefineCustomText('')
+    setRefinedFlashKeys({})
+    setCopyFormToast(false)
+    setCopyEntireSuccess(false)
+  }, [])
 
   useEffect(() => {
     tutorialPhaseRef.current = tutorialPhase
@@ -566,6 +816,7 @@ export default function CoachingApp() {
 
   useEffect(() => {
     if (profileLoading || !profile) return
+    if (profile.needs_coaching_workspace_setup) return
     // Supabase `has_seen_tutorial` is the source of truth (see mark_tutorial_seen / reset_tutorial_for_replay).
     if (!profile.has_seen_tutorial) {
       setTutorialPhase((p) => {
@@ -575,7 +826,7 @@ export default function CoachingApp() {
     } else {
       setTutorialPhase((p) => (p === 'spotlight_output' ? p : 'off'))
     }
-  }, [profileLoading, profile?.has_seen_tutorial])
+  }, [profileLoading, profile?.has_seen_tutorial, profile?.needs_coaching_workspace_setup])
 
   useEffect(() => {
     if (tutorialPhase !== 'walkthrough') return
@@ -588,6 +839,70 @@ export default function CoachingApp() {
   useEffect(() => {
     if (profile && hasPremiumAccess(profile)) setShowLimitPaywall(false)
   }, [profile])
+
+  useEffect(() => {
+    if (profileLoading || !profile) return
+    if (profile.needs_coaching_workspace_setup) {
+      setCoachingWorkspace(profile.coaching_workspace)
+      return
+    }
+    const fromLs = readWorkspaceFromStorage()
+    const resolved = fromLs ?? profile.coaching_workspace
+    const local = coachingWorkspaceRef.current
+    if (resolved !== local) {
+      resetWorkspaceScopedFormState()
+      setCoachingWorkspace(resolved)
+    }
+    if (fromLs && fromLs !== profile.coaching_workspace && supabase) {
+      void persistCoachingWorkspace(supabase, fromLs).then((r) => {
+        if (r.ok) void refresh()
+      })
+    }
+  }, [
+    profileLoading,
+    profile?.id,
+    profile?.coaching_workspace,
+    profile?.needs_coaching_workspace_setup,
+    refresh,
+    resetWorkspaceScopedFormState,
+  ])
+
+  useEffect(() => {
+    if (!quickTopicSelection) return
+    if (!coachingTopicOptionById(coachingWorkspace, quickTopicSelection)) {
+      setQuickTopicSelection('')
+    }
+  }, [coachingWorkspace, quickTopicSelection])
+
+  const selectCoachingWorkspace = useCallback(
+    async (next: CoachingWorkspace) => {
+      const onboarding = profile?.needs_coaching_workspace_setup === true
+      if (!onboarding && next === coachingWorkspace) return
+      if (next !== coachingWorkspace || onboarding) {
+        resetWorkspaceScopedFormState()
+      }
+      setCoachingWorkspace(next)
+      try {
+        localStorage.setItem(WORKSPACE_STORAGE_KEY, next)
+      } catch {
+        /* ignore */
+      }
+      if (supabase && profile?.id) {
+        const r = await persistCoachingWorkspace(supabase, next)
+        if (!r.ok) console.error('[workspace]', r.error)
+        await refresh()
+      }
+    },
+    [
+      coachingWorkspace,
+      profile?.id,
+      profile?.needs_coaching_workspace_setup,
+      refresh,
+      resetWorkspaceScopedFormState,
+    ],
+  )
+
+  const workspaceUI = WORKSPACE_UI[coachingWorkspace]
 
   const refinementQuota = useMemo(
     () => getRefinementQuotaForProfile(profile, profile?.email ?? null),
@@ -674,8 +989,9 @@ export default function CoachingApp() {
       coachingReason: input.coachingReason.trim(),
       notes: input.notes.trim(),
       mode: formMode,
+      coachingWorkspace,
     }
-  }, [input, formMode])
+  }, [input, formMode, coachingWorkspace])
 
   type RunGenOpts = { isTutorialRun?: boolean; skipWarmup?: boolean }
 
@@ -809,6 +1125,7 @@ export default function CoachingApp() {
       completeTutorial,
       refresh,
       triggerPostTutorialFeedbackNudge,
+      coachingWorkspace,
     ],
   )
 
@@ -867,6 +1184,7 @@ export default function CoachingApp() {
           mode: formMode,
           employeeName: input.employeeName,
           coachingFor: input.coachingReason,
+          coachingWorkspace,
         })
         setLogText(mergeRefinedSectionIntoLog(logText, sectionId, result.refinedText))
         if (result.usage) {
@@ -926,16 +1244,20 @@ export default function CoachingApp() {
       input.employeeName,
       applyUsageSnapshot,
       applyRefinementSnapshot,
+      coachingWorkspace,
     ],
   )
 
-  const applyQuickTopicById = useCallback((id: string) => {
-    const opt = COACHING_TOPIC_BY_ID[id]
-    if (!opt) return
-    setFormMode(opt.mode)
-    setInput(opt.input)
-    setShowValidation(false)
-  }, [])
+  const applyQuickTopicById = useCallback(
+    (id: string) => {
+      const opt = coachingTopicOptionById(coachingWorkspace, id)
+      if (!opt) return
+      setFormMode(opt.mode)
+      setInput(opt.input)
+      setShowValidation(false)
+    },
+    [coachingWorkspace],
+  )
 
   const onQuickTopicChange = useCallback(
     (value: string) => {
@@ -949,8 +1271,13 @@ export default function CoachingApp() {
   const invalidName = showValidation && !input.employeeName.trim()
   const invalidReason = showValidation && !input.coachingReason.trim()
 
+  const workspaceGateOpen = Boolean(!profileLoading && profile?.needs_coaching_workspace_setup)
+
   const generationBlocked =
-    profileLoading || !profile || (!canUseAiGeneration(profile) && tutorialPhase !== 'spotlight_generate')
+    profileLoading ||
+    !profile ||
+    workspaceGateOpen ||
+    (!canUseAiGeneration(profile) && tutorialPhase !== 'spotlight_generate')
   const tutorialStep = TUTORIAL_STEPS[tutorialStepIndex]
   const tutorialHighlightQuickTopics = tutorialPhase === 'walkthrough' && tutorialStepIndex === 1
   const tutorialHighlightGenerate =
@@ -958,13 +1285,64 @@ export default function CoachingApp() {
 
   return (
     <div className="app" data-mobile-sticky-gen={tutorialPhase === 'off' ? 'on' : 'off'}>
+      {workspaceGateOpen && (
+        <div
+          className="workspace-gate-root"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="workspace-gate-title"
+        >
+          <div className="workspace-gate-backdrop" aria-hidden />
+          <div className="workspace-gate-card card">
+            <p className="workspace-gate-kicker">Get started</p>
+            <h2 id="workspace-gate-title" className="workspace-gate-title">
+              Choose your coaching workspace
+            </h2>
+            <p className="workspace-gate-lede">
+              Trackora adapts topics, tone, and examples to your team. You can change this anytime in Settings.
+            </p>
+            <div className="workspace-picker-grid workspace-picker-grid--gate">
+              <button
+                type="button"
+                className={
+                  'workspace-card' + (coachingWorkspace === 'mobile_sales' ? ' workspace-card--active' : '')
+                }
+                aria-pressed={coachingWorkspace === 'mobile_sales'}
+                onClick={() => void selectCoachingWorkspace('mobile_sales')}
+              >
+                <span className="workspace-card-icon" aria-hidden>
+                  📱
+                </span>
+                <span className="workspace-card-title">{WORKSPACE_LABEL.mobile_sales}</span>
+                <span className="workspace-card-desc">Wireless retail, metrics, floor coaching</span>
+              </button>
+              <button
+                type="button"
+                className={
+                  'workspace-card' +
+                  (coachingWorkspace === 'general_workplace' ? ' workspace-card--active' : '')
+                }
+                aria-pressed={coachingWorkspace === 'general_workplace'}
+                onClick={() => void selectCoachingWorkspace('general_workplace')}
+              >
+                <span className="workspace-card-icon" aria-hidden>
+                  🧑‍💼
+                </span>
+                <span className="workspace-card-title">{WORKSPACE_LABEL.general_workplace}</span>
+                <span className="workspace-card-desc">Offices, service, warehouses, and more</span>
+              </button>
+            </div>
+            <p className="workspace-gate-foot">Tap a card to continue</p>
+          </div>
+        </div>
+      )}
       {tutorialPhase === 'spotlight_generate' && <div className="tutorial-dim" aria-hidden />}
       <header className="header">
         <p className="eyebrow">Trackora</p>
         <h1>Coaching form</h1>
         <p className="lede">
-          <span className="lede-line">Create professional coaching and recognition forms in seconds.</span>
-          <span className="lede-line lede-line--trust">Built for retail leaders and fast-moving teams.</span>
+          <span className="lede-line">{workspaceUI.ledePrimary}</span>
+          <span className="lede-line lede-line--trust">{workspaceUI.ledeTrust}</span>
         </p>
       </header>
 
@@ -1037,15 +1415,15 @@ export default function CoachingApp() {
             </div>
           )}
           <label className={'field' + (tutorialHighlightQuickTopics ? ' tutorial-field-highlight' : '')}>
-            <span className="label-text">Quick coaching topics</span>
+            <span className="label-text">{workspaceUI.quickTopicsLabel}</span>
             <select
               className={'field-control' + (tutorialHighlightQuickTopics ? ' is-tutorial-focus' : '')}
               value={quickTopicSelection}
               onChange={(e) => onQuickTopicChange(e.target.value)}
-              aria-label="Quick coaching topics"
+              aria-label={workspaceUI.quickTopicsLabel}
             >
               <option value="">Select a quick topic...</option>
-              {COACHING_TOPIC_GROUPS.map((g) => (
+              {WORKSPACE_TOPIC_GROUPS[coachingWorkspace].map((g) => (
                 <optgroup key={g.groupLabel} label={g.groupLabel}>
                   {g.options.map((o) => (
                     <option key={o.id} value={o.id}>
@@ -1094,7 +1472,7 @@ export default function CoachingApp() {
               className={'field-control textarea' + (invalidReason ? ' is-invalid' : '')}
               value={input.coachingReason}
               onChange={(e) => setInput((s) => ({ ...s, coachingReason: e.target.value }))}
-              placeholder="e.g. Low APS, high HPA — add numbers in notes"
+              placeholder={workspaceUI.reasonPlaceholder}
               rows={3}
             />
           </label>
@@ -1104,7 +1482,7 @@ export default function CoachingApp() {
               className="field-control textarea"
               value={input.notes}
               onChange={(e) => setInput((s) => ({ ...s, notes: e.target.value }))}
-              placeholder="Observations, context, numbers…"
+              placeholder={workspaceUI.notesPlaceholder}
               rows={3}
             />
           </label>
@@ -1131,7 +1509,7 @@ export default function CoachingApp() {
               aria-describedby={tutorialPhase === 'spotlight_generate' ? 'tutorial-generate-hint' : undefined}
             >
               {loading && <span className="spinner" aria-hidden />}
-              {loading ? 'Generating...' : 'Generate AI Coaching Form'}
+              {loading ? 'Generating...' : workspaceUI.generateButtonIdle}
             </button>
           </div>
           {showValidation && !canGenerate && (
@@ -1147,7 +1525,7 @@ export default function CoachingApp() {
                 </span>
                 <p className="plan-limit-title">{FREE_LIMIT_HEADLINE}</p>
               </div>
-              <p className="plan-limit-text plan-limit-text--compact">{FREE_LIMIT_BODY}</p>
+              <p className="plan-limit-text plan-limit-text--compact">{workspaceUI.freeLimitBody}</p>
               <ul className="plan-limit-bullets">
                 {PAYWALL_PRO_BULLETS.map((line) => (
                   <li key={line}>{line}</li>
@@ -1218,7 +1596,7 @@ export default function CoachingApp() {
           </div>
           {loading && (
             <div className="output-loading-premium" aria-busy="true" aria-live="polite">
-              <p className="output-loading-caption">Generating professional coaching form...</p>
+              <p className="output-loading-caption">{workspaceUI.outputLoadingCaption}</p>
               <div className="output-document output-document--loading">
                 <div className="output-skeleton-doc">
                   <div className="output-skeleton-line output-skeleton-line--title" />
@@ -1259,9 +1637,7 @@ export default function CoachingApp() {
                   </svg>
                 </div>
                 <h3 className="output-empty-title">Your AI-generated coaching form will appear here</h3>
-                <p className="output-empty-sub">
-                  Fill out the details and generate a professional coaching or recognition form instantly.
-                </p>
+                <p className="output-empty-sub">{workspaceUI.outputEmptySub}</p>
               </div>
             </div>
           )}
@@ -1614,7 +1990,7 @@ export default function CoachingApp() {
                 {FREE_LIMIT_HEADLINE}
               </h2>
             </div>
-            <p className="paywall-body">{FREE_LIMIT_BODY}</p>
+            <p className="paywall-body">{workspaceUI.freeLimitBody}</p>
             <div className="paywall-plan-pick" role="group" aria-label="Choose a plan">
               <div className="paywall-plan-card paywall-plan-card--pro">
                 <span className="paywall-plan-kicker">Pro</span>

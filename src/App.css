@@ -86,6 +86,142 @@
   color: var(--muted);
 }
 
+.workspace-picker {
+  margin: 0 0 1.25rem;
+}
+
+.workspace-picker-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.workspace-picker-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+@media (min-width: 640px) {
+  .workspace-picker-grid {
+    flex-direction: row;
+    gap: 0.65rem;
+  }
+}
+
+.workspace-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.workspace-card:hover {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.workspace-card--active {
+  border-color: rgba(96, 165, 250, 0.55);
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.2);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.workspace-card-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.workspace-card-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.workspace-card-desc {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.workspace-picker-grid--gate {
+  margin-top: 0.35rem;
+}
+
+.workspace-gate-root {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+
+.workspace-gate-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 8, 16, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.workspace-gate-card {
+  position: relative;
+  z-index: 1;
+  max-width: 26rem;
+  width: 100%;
+  padding: 1.75rem 1.5rem 1.5rem;
+}
+
+.workspace-gate-kicker {
+  margin: 0 0 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+  text-align: center;
+}
+
+.workspace-gate-title {
+  margin: 0 0 0.6rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.workspace-gate-lede {
+  margin: 0 0 1.1rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
+
+.workspace-gate-foot {
+  margin: 1rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: center;
+}
+
 .mode-toggle {
   display: flex;
   padding: 0.25rem;

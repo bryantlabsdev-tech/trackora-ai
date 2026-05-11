@@ -1,3 +1,5 @@
+import { parseCoachingWorkspace } from './coachingWorkspace.mjs'
+
 /**
  * Normalize whitespace: trim and collapse internal runs to a single space.
  * @param {unknown} value
@@ -58,8 +60,8 @@ export function isMeaninglessNotes(normalizedNotes) {
 
 /**
  * Sanitize coaching form input before model / fallback.
- * @param {{ employeeName?: unknown; coachingReason?: unknown; notes?: unknown; mode?: unknown }} payload
- * @returns {{ employeeName: string; coachingReason: string; notes: string; mode: 'coaching' | 'recognition' }}
+ * @param {{ employeeName?: unknown; coachingReason?: unknown; notes?: unknown; mode?: unknown; coachingWorkspace?: unknown; workspace?: unknown }} payload
+ * @returns {{ employeeName: string; coachingReason: string; notes: string; mode: 'coaching' | 'recognition'; coachingWorkspace: 'mobile_sales' | 'general_workplace' }}
  */
 export function sanitizeCoachingPayload(payload) {
   const employeeName = stripJunkTokens(payload?.employeeName)
@@ -72,5 +74,6 @@ export function sanitizeCoachingPayload(payload) {
     .trim()
     .toLowerCase()
   const mode = rawMode === 'recognition' ? 'recognition' : 'coaching'
-  return { employeeName, coachingReason, notes, mode }
+  const coachingWorkspace = parseCoachingWorkspace(payload?.coachingWorkspace ?? payload?.workspace)
+  return { employeeName, coachingReason, notes, mode, coachingWorkspace }
 }

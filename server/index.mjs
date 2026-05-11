@@ -471,6 +471,141 @@ const COACHING_PROMPT =
   'Layout example:\n' +
   SECTION_SHAPE
 
+/** General workplace — same section contract as mobile retail, without wireless/sales-floor defaults. */
+const GENERAL_COACHING_PRIORITY =
+  'PRIORITY:\n' +
+  '1. Use only the provided input (coachingReason and notes).\n' +
+  '2. Do not invent incidents, customers, HR actions, investigations, or metrics.\n' +
+  '3. Do not mix unrelated topics or domains.\n' +
+  '4. Keep the WHOLE form noticeably shorter than typical HR coaching: target ~35–40% less total wording—brief sections, no filler, no repeating the same facts.\n' +
+  '5. Avoid generic corporate filler language.\n' +
+  '6. The notes field (when present) strongly influences tone and severity: reminders, “not serious,” “light coaching,” or “no break schedule” → much softer, conversational, zero write-up tone.\n\n'
+
+const GENERAL_COACHING_NATURAL_VOICE =
+  'NATURAL SUPERVISOR VOICE (not corporate HR, not AI-polished):\n' +
+  '- Sound like a real manager or lead: plain words, short sentences, how people actually talk at work.\n' +
+  '- Do NOT repeat the same concrete details in every section—state specifics once in Pre-Coaching Notes and/or Situation, then use short references (“that timing,” “what we talked about”) elsewhere.\n' +
+  '- Never restate the full issue three or four times with different buzzwords.\n\n' +
+  'STRICTLY DO NOT USE (or close paraphrases):\n' +
+  '- performance improvement plan, mitigate, operational excellence, cascade, moving forward, ensure alignment, leverage.\n\n' +
+  'Lean on simple language instead (pick a few that fit; do not stuff every phrase into one document):\n' +
+  '- just wanted to mention, wanted to bring it up, keep an eye on, try to, quick heads-up, let’s tighten this up.\n\n' +
+  'TONE VARIATION:\n' +
+  '- Not every coaching should match the same cadence. Vary openings so outputs do not read like one rigid template.\n\n'
+
+const GENERAL_COACHING_ROLE_AND_SCENARIOS =
+  'ROLE: You are an experienced workplace supervisor writing a CORRECTIVE COACHING form (mode coaching only).\n' +
+  'Industries may include offices, restaurants, warehouses, healthcare support roles, hospitality, field teams, or other workplaces—use ONLY what the user’s words imply; never invent org-specific jargon.\n\n' +
+  'The user may describe attendance, professionalism, customer/guest service, teamwork, accountability, communication, productivity, leadership expectations, policy/safety compliance, conduct, or similar—follow what is actually in coachingReason and notes.\n\n' +
+  'IF THE INPUT IS PRIMARILY METRICS / TARGETS (only when the user brought them up):\n' +
+  '- Tie behavior to outcomes in plain language—only what the input supports. Do not add sales wireless KPIs, activations, or retail floor scripts.\n\n' +
+  'IF THE INPUT IS PRIMARILY A BEHAVIORAL SCENARIO:\n' +
+  '- Address it straight. Firm when needed, still conversational—not a policy memo.\n' +
+  '- Say why it matters in one simple beat if Impact needs it.\n\n' +
+  'ALWAYS: Follow PRIORITY and NATURAL SUPERVISOR VOICE. Short and real.\n\n'
+
+const GENERAL_COACHING_OUTCOMES =
+  'WORK OUTCOMES — when coachingReason/notes are about performance, service, productivity, quality, deadlines, or similar:\n' +
+  '- Impact in one or two plain sentences: how it shows up for customers/guests/clients, teammates, safety, or operations—without stacked buzzwords.\n' +
+  '- Keep fixes grounded in what the user wrote; no invented quotas.\n\n' +
+  'When the topic is NOT about performance targets (e.g. attendance-only, policy-only), keep Impact short and specific to that lane—do not force unrelated outcome stories.\n\n'
+
+const GENERAL_COACHING_QUALITY =
+  'COACHING QUALITY:\n' +
+  '- Supervisor → team member: human, specific, brief.\n' +
+  '- Sections stack without repeating the same story—each section adds something new or sharper.\n\n'
+
+const GENERAL_COACHING_PROMPT =
+  GENERAL_COACHING_PRIORITY +
+  GENERAL_COACHING_NATURAL_VOICE +
+  GENERAL_COACHING_ROLE_AND_SCENARIOS +
+  GENERAL_COACHING_OUTCOMES +
+  GENERAL_COACHING_QUALITY +
+  'VOICE & STAY ON TOPIC:\n' +
+  '- Conversational supervisor first—plain talk, not polished HR prose.\n' +
+  '- Anchor to coachingReason and notes; add only closely related context for the SAME topic.\n' +
+  '- Do not invent problems, people, incidents, numbers, or details not implied by the user.\n' +
+  '- Avoid retail wireless defaults: do not mention APS, HPA, MPT, activations, postpaid, tablets, Mobile Experts, or the sales floor unless the user explicitly wrote those.\n\n' +
+  'TOPIC_HINT in the system message is only to nudge Coaching Category and tone—it is not extra content to paste. Every section must still reflect the user’s actual words.\n\n' +
+  'OUTPUT SHAPE:\n' +
+  '- Exact section titles and order below. Plain text, paste-ready. No ## markdown or bold titles.\n\n' +
+  'LENGTH:\n' +
+  '- Default: ONE tight sentence per section when possible (two only if truly needed). Behavior often one sentence.\n' +
+  '- Next Steps: 2–3 very short bullets (a few words each is fine).\n' +
+  '- Overall output ~35–40% shorter than a typical formal write-up—trim relentlessly.\n\n' +
+  'NUMBERS / TARGETS:\n' +
+  '- If the user gave numbers, use them directly and specifically.\n' +
+  '- If numbers are absent, do not invent KPIs.\n\n' +
+  'CLEAR EXPECTATIONS (without sounding like HR):\n' +
+  '- Say what needs to shift in plain language—short bullets or one simple sentence.\n' +
+  '- Prefer “need you to,” “try to,” “let’s keep,” “keep an eye on” over formal mandate tone unless the issue is severe.\n\n' +
+  'AVOID these vague AI / HR phrases:\n' +
+  '- "indicates a need for improvement", "below expectations", "focus on improvement"\n\n' +
+  'Also avoid stiff corporate phrasing ("leverage," "moving forward," "align on expectations").\n\n' +
+  'SENTENCES: Title-case employeeName from JSON; bullet lines start with a capital letter. Complete sentences only.\n\n' +
+  'SECTIONS — exact titles, this order. Nothing before "Pre-Coaching Notes:":\n' +
+  'Pre-Coaching Notes:\n' +
+  'Coaching Category:\n' +
+  'Situation:\n' +
+  'Behavior:\n' +
+  'Impact:\n' +
+  'Next Steps:\n' +
+  'Manager Follow-Up:\n\n' +
+  'SECTION GUIDANCE:\n' +
+  'Pre-Coaching Notes: Name first; conversational opener optional (“just wanted to mention…”). Put the concrete facts here OR in Situation—not both in full detail.\n' +
+  'Coaching Category: One short natural label (e.g. Attendance, Customer Service, Policy Compliance).\n' +
+  'Situation: Plain facts of what occurred—minimal repetition of Pre-Coaching Notes.\n' +
+  'Behavior: What you need from them going forward—often one sentence; no copy-paste of Situation.\n' +
+  'Impact: One short beat on why it matters—do not reuse banned phrases.\n' +
+  'Next Steps: Short bullets; each bullet adds a distinct action.\n' +
+  'Manager Follow-Up: Brief and human (e.g. quick follow-up, check-in later)—not a second lecture.\n\n' +
+  'Layout example:\n' +
+  SECTION_SHAPE
+
+const GENERAL_RECOGNITION_PROMPT =
+  'PRIORITY:\n' +
+  '1. Use only coachingReason and notes.\n' +
+  '2. Do not invent praise, numbers, or scenarios.\n' +
+  '3. Stay positive and specific—no generic fluff.\n\n' +
+  'You are a workplace supervisor writing a RECOGNITION form only (mode recognition). This is NOT coaching.\n' +
+  'Use workplace-appropriate language only when the user’s input clearly fits; never invent metrics or customer/guest stories.\n\n' +
+  'GROUNDING:\n' +
+  '- Praise only what appears in coachingReason and notes.\n' +
+  '- Do not mention sales KPIs, retail floor performance, activations, or wireless metrics unless the user explicitly wrote those topics.\n\n' +
+  'Rules:\n' +
+  '- 100% positive reinforcement tied to the stated behavior.\n' +
+  '- No gaps, no deficit framing.\n\n' +
+  'Next Steps: continue / maintain / build on strengths—word bullets to match what the user actually praised.\n\n' +
+  'Manager Follow-Up: supportive only. No accountability for failure.\n\n' +
+  'LENGTH: 1–2 short sentences per section; Next Steps 2–3 bullets.\n' +
+  'SENTENCES: Title-case employeeName from JSON; bullets start with a capital letter.\n\n' +
+  'OUTPUT STRUCTURE — exact section titles in this order:\n' +
+  'Pre-Coaching Notes:\n' +
+  'Coaching Category:\n' +
+  'Situation:\n' +
+  'Behavior:\n' +
+  'Impact:\n' +
+  'Next Steps:\n' +
+  'Manager Follow-Up:\n\n' +
+  'Layout example:\n' +
+  SECTION_SHAPE
+
+const GENERAL_COACHING_USER_PREFIX =
+  'TASK: Write the full coaching form. Stay anchored to coachingReason and notes—human and concise, not polished corporate copy.\n' +
+  'Optional notes are authoritative for tone: “just a reminder,” “friendly reminder,” “not a write-up,” “light coaching,” “verbal reminder,” “not serious,” or “no break schedule” → REMINDER_MODE softness (see system message): short, conversational, zero disciplinary / write-up tone.\n' +
+  'This is GENERAL WORKPLACE coaching—not retail wireless by default. Do not add sales-floor stories, activations, APS/HPA/MPT, or wireless jargon unless the user’s text explicitly includes them.\n' +
+  'Use ISSUE_TOPIC_HINT and the TOPIC GUIDE for category/tone only—do not drift into unrelated themes.\n' +
+  'If numbers exist in the JSON, reference them faithfully; never invent goals or extra KPIs.\n' +
+  'Problem / why it matters / next actions must come through in Situation, Impact, and Next Steps as described in the system message. Keep it short and manager-real.\n\n'
+
+const GENERAL_RECOGNITION_USER_PREFIX =
+  'TASK: Recognition form only. 100% positive reinforcement. You are NOT writing coaching.\n' +
+  'Celebrate only what appears in coachingReason and notes—no invented metrics or stories.\n' +
+  'General workplace context: avoid defaulting to retail wireless or sales KPIs unless the user wrote that.\n' +
+  'Next Steps: continue / maintain / build on strengths—word bullets to match the user’s praise.\n' +
+  'Manager Follow-Up: supportive check-in only; no deficit framing.\n' +
+  'Use employeeName from JSON for the team member’s name.\n\n'
+
 /**
  * Recognition-only system prompt. Zero overlap with COACHING_PROMPT — different role, rules, and vocabulary.
  */
@@ -625,10 +760,15 @@ function buildRefineSectionPrompt(payload) {
     (typeof payload.sectionTitle === 'string' ? payload.sectionTitle.trim() : '') ||
     'Section'
 
+  const general = payload.coachingWorkspace === 'general_workplace'
   const modeLine =
     payload.mode === 'recognition'
-      ? 'You refine ONE section of a retail recognition / positive-feedback form.'
-      : 'You refine ONE section of a retail corrective coaching documentation form.'
+      ? general
+        ? 'You refine ONE section of a workplace recognition / positive-feedback form.'
+        : 'You refine ONE section of a retail recognition / positive-feedback form.'
+      : general
+        ? 'You refine ONE section of a workplace corrective coaching documentation form.'
+        : 'You refine ONE section of a retail corrective coaching documentation form.'
 
   const coachingCtx =
     typeof payload.coachingFor === 'string' && payload.coachingFor.trim()
@@ -674,19 +814,30 @@ Reply with only the rewritten section body.`
 function buildCoachingLogMessages(action, payload) {
   if (action !== 'coaching_log') return null
   const mode = payload?.mode === 'recognition' ? 'recognition' : 'coaching'
+  const workspace = payload?.coachingWorkspace === 'general_workplace' ? 'general_workplace' : 'mobile_sales'
 
   const blob = normalizeIssueText(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`)
   const { primary: issuePrimary } = classifyIssue(blob, mode)
-  const topicGuide = buildCoachingClassRules(issuePrimary, mode)
+  let topicGuide = buildCoachingClassRules(issuePrimary, mode)
+  if (workspace === 'general_workplace') {
+    topicGuide +=
+      '\n\nWORKSPACE: General workplace. Avoid retail wireless jargon (APS/HPA/MPT, activations, postpaid, sales floor, Mobile Expert) and default sales KPIs unless the user explicitly used them.'
+  }
 
   const reminderTone =
     mode === 'coaching' && isLightReminderCoaching(payload?.notes, payload?.coachingReason)
 
   let systemPrompt
   if (mode === 'recognition') {
-    systemPrompt = `${RECOGNITION_PROMPT}\n\nTOPIC GUIDE:\n${topicGuide}`
+    systemPrompt =
+      workspace === 'general_workplace'
+        ? `${GENERAL_RECOGNITION_PROMPT}\n\nTOPIC GUIDE:\n${topicGuide}`
+        : `${RECOGNITION_PROMPT}\n\nTOPIC GUIDE:\n${topicGuide}`
   } else {
-    systemPrompt = `${COACHING_PROMPT}\n\nTOPIC GUIDE (tone and boundaries—not a template to paste):\n${topicGuide}`
+    systemPrompt =
+      workspace === 'general_workplace'
+        ? `${GENERAL_COACHING_PROMPT}\n\nTOPIC GUIDE (tone and boundaries—not a template to paste):\n${topicGuide}`
+        : `${COACHING_PROMPT}\n\nTOPIC GUIDE (tone and boundaries—not a template to paste):\n${topicGuide}`
     if (reminderTone) {
       systemPrompt += `\n\n${REMINDER_COACHING_MODE}`
     }
@@ -694,9 +845,9 @@ function buildCoachingLogMessages(action, payload) {
 
   let userPreamble
   if (mode === 'recognition') {
-    userPreamble = RECOGNITION_USER_PREFIX
+    userPreamble = workspace === 'general_workplace' ? GENERAL_RECOGNITION_USER_PREFIX : RECOGNITION_USER_PREFIX
   } else {
-    userPreamble = COACHING_USER_PREFIX
+    userPreamble = workspace === 'general_workplace' ? GENERAL_COACHING_USER_PREFIX : COACHING_USER_PREFIX
   }
 
   const body = JSON.stringify(payload ?? {}, null, 2)
@@ -983,7 +1134,7 @@ async function getProfileForUser(userId) {
   const { data, error } = await supabaseAdmin
     .from('profiles')
     .select(
-      'id, email, is_pro, plan_tier, usage_count, subscription_status, current_period_end, refinement_count, refinement_month, stripe_customer_id, stripe_subscription_id',
+      'id, email, is_pro, plan_tier, usage_count, subscription_status, current_period_end, refinement_count, refinement_month, stripe_customer_id, stripe_subscription_id, coaching_workspace',
     )
     .eq('id', userId)
     .maybeSingle()
@@ -1009,7 +1160,7 @@ async function ensureRefinementMonthReset(userId, profile) {
     .update({ refinement_count: 0, refinement_month: currentMonth })
     .eq('id', userId)
     .select(
-      'id, email, is_pro, plan_tier, usage_count, subscription_status, current_period_end, refinement_count, refinement_month',
+      'id, email, is_pro, plan_tier, usage_count, subscription_status, current_period_end, refinement_count, refinement_month, coaching_workspace',
     )
     .single()
 

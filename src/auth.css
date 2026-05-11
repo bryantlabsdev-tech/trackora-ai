@@ -470,6 +470,30 @@
   gap: 0.2rem;
 }
 
+.workspace-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.workspace-settings-select {
+  width: 100%;
+  max-width: 22rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: var(--radius-lg, 0.65rem);
+  border: 1px solid var(--border-strong, rgba(148, 163, 184, 0.25));
+  background: var(--bg-elevated, rgba(15, 18, 28, 0.85));
+  color: var(--text, #e2e8f0);
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.workspace-settings-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .settings-label {
   color: var(--muted);
   font-size: 0.78rem;

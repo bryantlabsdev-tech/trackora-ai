@@ -1,13 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBillingReconcileUrl } from './apiBase'
-import type { Profile, ProfileRow } from '../types/profile'
+import { parseCoachingWorkspace } from '../../shared/coachingWorkspace.mjs'
+import type { CoachingWorkspace, Profile, ProfileRow } from '../types/profile'
 
 function mapRow(row: ProfileRow): Profile {
   return { ...row }
 }
 
 const PROFILE_COLUMNS =
-  'id, email, is_pro, plan_tier, usage_count, bonus_ai_generations, refinement_count, refinement_month, has_seen_tutorial, has_seen_paywall, tutorial_welcome_bonus_granted, stripe_customer_id, stripe_subscription_id, subscription_status, current_period_end, created_at'
+  'id, email, is_pro, plan_tier, usage_count, bonus_ai_generations, refinement_count, refinement_month, has_seen_tutorial, has_seen_paywall, tutorial_welcome_bonus_granted, stripe_customer_id, stripe_subscription_id, subscription_status, current_period_end, created_at, coaching_workspace, needs_coaching_workspace_setup'
 
 export async function fetchProfile(client: SupabaseClient, userId: string): Promise<Profile | null> {
   const { data, error } = await client.from('profiles').select(PROFILE_COLUMNS).eq('id', userId).maybeSingle()
@@ -26,9 +27,16 @@ export async function fetchProfile(client: SupabaseClient, userId: string): Prom
   const pt = String(raw.plan_tier ?? 'free').trim().toLowerCase()
   const plan_tier: ProfileRow['plan_tier'] =
     pt === 'elite' ? 'elite' : pt === 'pro' ? 'pro' : 'free'
+  const coaching_workspace: CoachingWorkspace = parseCoachingWorkspace(
+    (raw as { coaching_workspace?: string }).coaching_workspace,
+  )
+  const needs_coaching_workspace_setup = (raw as { needs_coaching_workspace_setup?: boolean })
+    .needs_coaching_workspace_setup === true
   return mapRow({
     ...raw,
     plan_tier,
+    coaching_workspace,
+    needs_coaching_workspace_setup,
     has_seen_tutorial: raw.has_seen_tutorial === true,
     has_seen_paywall: raw.has_seen_paywall === true,
     bonus_ai_generations: Math.max(0, Math.floor(Number(raw.bonus_ai_generations) || 0)),
@@ -132,6 +140,18 @@ export async function markPaywallSeen(client: SupabaseClient): Promise<{ ok: boo
   const { error } = await client.rpc('mark_paywall_seen')
   if (error) {
     console.error('[profiles] mark_paywall_seen', error.message)
+    return { ok: false, error: error.message }
+  }
+  return { ok: true }
+}
+
+export async function persistCoachingWorkspace(
+  client: SupabaseClient,
+  workspace: CoachingWorkspace,
+): Promise<{ ok: boolean; error?: string }> {
+  const { error } = await client.rpc('set_coaching_workspace', { p_workspace: workspace })
+  if (error) {
+    console.error('[profiles] set_coaching_workspace', error.message)
     return { ok: false, error: error.message }
   }
   return { ok: true }

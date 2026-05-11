@@ -1,4 +1,5 @@
 import { normalizeWhitespace, stripJunkTokens } from './sanitizeCoachingPayload.mjs'
+import { parseCoachingWorkspace } from './coachingWorkspace.mjs'
 import { COACHING_FORM_SECTION_LABELS } from './coachingSectionConstants.mjs'
 
 /** @type {Record<string, string>} */
@@ -11,6 +12,18 @@ export const REFINE_PRESET_INSTRUCTIONS = {
   expand: 'Expand slightly with helpful, concrete detail; stay concise overall.',
   clearer_expectations:
     'Clarify expectations and outcomes so the associate knows exactly what good looks like.',
+}
+
+/** @type {Record<string, string>} */
+const REFINE_PRESET_INSTRUCTIONS_GENERAL = {
+  softer:
+    'Rewrite with a softer, less confrontational tone while staying appropriate for general workplace coaching.',
+  more_direct: REFINE_PRESET_INSTRUCTIONS.more_direct,
+  professional: REFINE_PRESET_INSTRUCTIONS.professional,
+  shorten: REFINE_PRESET_INSTRUCTIONS.shorten,
+  expand: REFINE_PRESET_INSTRUCTIONS.expand,
+  clearer_expectations:
+    'Clarify expectations and outcomes so the team member knows exactly what good looks like.',
 }
 
 export const REFINE_PRESET_KEYS = Object.keys(REFINE_PRESET_INSTRUCTIONS)
@@ -56,6 +69,7 @@ export function resolveCanonicalSectionName(raw) {
  *   mode: 'coaching' | 'recognition'
  *   employeeName: string
  *   coachingFor: string
+ *   coachingWorkspace: 'mobile_sales' | 'general_workplace'
  * }}
  */
 export function sanitizeRefineSectionPayload(raw) {
@@ -84,6 +98,7 @@ export function sanitizeRefineSectionPayload(raw) {
 
   const employeeName = stripJunkTokens(raw?.employeeName)
   const coachingFor = stripJunkTokens(raw?.coachingFor ?? raw?.coachingReason ?? '')
+  const coachingWorkspace = parseCoachingWorkspace(raw?.coachingWorkspace ?? raw?.workspace)
 
   const titleRaw = String(raw?.sectionTitle ?? '').trim()
 
@@ -98,6 +113,7 @@ export function sanitizeRefineSectionPayload(raw) {
     mode,
     employeeName,
     coachingFor,
+    coachingWorkspace,
   }
 }
 
@@ -120,9 +136,11 @@ export function validateRefineSectionPayload(p) {
  * @returns {string}
  */
 export function buildRefinementDirective(p) {
+  const presetTable =
+    p.coachingWorkspace === 'general_workplace' ? REFINE_PRESET_INSTRUCTIONS_GENERAL : REFINE_PRESET_INSTRUCTIONS
   const parts = []
-  if (p.refinementPreset && REFINE_PRESET_INSTRUCTIONS[p.refinementPreset]) {
-    parts.push(REFINE_PRESET_INSTRUCTIONS[p.refinementPreset])
+  if (p.refinementPreset && presetTable[p.refinementPreset]) {
+    parts.push(presetTable[p.refinementPreset])
   }
   if (p.refinementInstruction.trim()) {
     parts.push(p.refinementInstruction.trim())

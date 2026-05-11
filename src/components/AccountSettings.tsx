@@ -3,6 +3,9 @@ import { useProfile } from '../context/ProfileContext'
 import { startEliteUpgrade } from '../api/startEliteUpgrade'
 import { getCreateBillingPortalSessionUrl, getCreateCheckoutSessionUrl } from '../lib/apiBase'
 import { supabase } from '../lib/supabase'
+import { persistCoachingWorkspace } from '../lib/profileApi'
+import { parseCoachingWorkspace } from '../../shared/coachingWorkspace.mjs'
+import { WORKSPACE_LABEL, WORKSPACE_STORAGE_KEY } from '../lib/workspaceLabels'
 import {
   freeGenerationsRemainingLabel,
   getPlanDisplayLabel,
@@ -31,6 +34,8 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
   const [passwordInfo, setPasswordInfo] = useState<string | null>(null)
   const [tutorialReplayLoading, setTutorialReplayLoading] = useState(false)
   const [tutorialReplayError, setTutorialReplayError] = useState<string | null>(null)
+  const [workspaceBusy, setWorkspaceBusy] = useState(false)
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null)
 
   const planLabel = profile ? getPlanDisplayLabel(profile, email ?? profile.email) : 'Free'
   const planPillClass =
@@ -193,6 +198,28 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
     }
   }
 
+  async function handleWorkspaceChange(raw: string) {
+    const next = parseCoachingWorkspace(raw)
+    if (!supabase || !profile || next === profile.coaching_workspace) return
+    setWorkspaceError(null)
+    setWorkspaceBusy(true)
+    try {
+      try {
+        localStorage.setItem(WORKSPACE_STORAGE_KEY, next)
+      } catch {
+        // ignore quota / private mode
+      }
+      const result = await persistCoachingWorkspace(supabase, next)
+      if (!result.ok) {
+        setWorkspaceError(result.error || 'Could not update workspace.')
+        return
+      }
+      await refresh()
+    } finally {
+      setWorkspaceBusy(false)
+    }
+  }
+
   async function handleChangePassword() {
     if (!supabase) {
       setPasswordError('Auth is not configured. Please refresh and try again.')
@@ -241,6 +268,35 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
               {email ?? 'Not available'}
             </span>
           </div>
+        </article>
+
+        <article className="card settings-card">
+          <h2 className="card-title">Workspace</h2>
+          <p className="settings-note">Coaching mode for forms, quick topics, and AI tone.</p>
+          {!profile && <p className="settings-note">Loading workspace…</p>}
+          {profile && (
+            <>
+              <div className="settings-row settings-row-stacked">
+                <span className="settings-label">Current workspace</span>
+                <span className="settings-value">{WORKSPACE_LABEL[profile.coaching_workspace]}</span>
+              </div>
+              <label className="workspace-settings-field">
+                <span className="settings-label">Change workspace</span>
+                <select
+                  className="workspace-settings-select"
+                  value={profile.coaching_workspace}
+                  onChange={(e) => void handleWorkspaceChange(e.target.value)}
+                  disabled={workspaceBusy || !supabase}
+                  aria-label="Change coaching workspace"
+                >
+                  <option value="mobile_sales">{WORKSPACE_LABEL.mobile_sales}</option>
+                  <option value="general_workplace">{WORKSPACE_LABEL.general_workplace}</option>
+                </select>
+              </label>
+              {workspaceBusy && <p className="settings-note">Saving…</p>}
+              {workspaceError && <p className="settings-error">{workspaceError}</p>}
+            </>
+          )}
         </article>
 
         <article className="card settings-card">
