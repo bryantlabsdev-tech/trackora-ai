@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useProfile } from '../context/ProfileContext'
 import { startEliteUpgrade } from '../api/startEliteUpgrade'
 import { getCreateBillingPortalSessionUrl, getCreateCheckoutSessionUrl } from '../lib/apiBase'
@@ -14,6 +14,7 @@ import {
   isElitePlan,
   isOwnerFreePro,
 } from '../types/profile'
+import PrivacyPolicyContent from './PrivacyPolicyContent'
 
 type AccountSettingsProps = {
   userId: string
@@ -36,6 +37,21 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
   const [tutorialReplayError, setTutorialReplayError] = useState<string | null>(null)
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
+  const [privacyModalOpen, setPrivacyModalOpen] = useState(false)
+
+  useEffect(() => {
+    if (!privacyModalOpen) return
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPrivacyModalOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = prevOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [privacyModalOpen])
 
   const planLabel = profile ? getPlanDisplayLabel(profile, email ?? profile.email) : 'Free'
   const planPillClass =
@@ -249,127 +265,160 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
 
   return (
     <main className="settings-page">
-      <header className="settings-header">
-        <p className="eyebrow">Trackora</p>
-        <h1>Account Settings</h1>
-        <p className="settings-subtitle">Manage your profile, plan, and account access.</p>
+      <header className="settings-page-header">
+        <div className="settings-page-header-main">
+          <p className="settings-dashboard-eyebrow">TrackoraAI</p>
+          <h1 className="settings-dashboard-title">Account Settings</h1>
+          <p className="settings-dashboard-desc">
+            Manage your profile, plan, workspace, and privacy.
+          </p>
+        </div>
+        <button type="button" className="settings-back-coaching btn-primary" onClick={() => void onGoToCoaching()}>
+          Back to Coaching
+        </button>
       </header>
 
-      <section className="settings-grid">
+      <section className="settings-grid" aria-label="Account sections">
         <article className="card settings-card">
-          <h2 className="card-title">Profile</h2>
-          <div className="settings-row">
-            <span className="settings-label">Name</span>
-            <span className="settings-value">{email ? email.split('@')[0] : 'Not set'}</span>
-          </div>
-          <div className="settings-row">
-            <span className="settings-label">Email</span>
-            <span className="settings-value settings-email" title={email ?? undefined}>
-              {email ?? 'Not available'}
-            </span>
-          </div>
+          <h2 className="card-title settings-section-title">Profile</h2>
+          <p className="settings-section-lead">Your account identity in TrackoraAI.</p>
+          <dl className="settings-dl">
+            <div className="settings-dl-row">
+              <dt className="settings-dl-term">Display name</dt>
+              <dd className={'settings-dl-def' + (email ? '' : ' settings-dl-def--empty')}>
+                {email ? email.split('@')[0] : 'Add after sign-in'}
+              </dd>
+            </div>
+            <div className="settings-dl-row">
+              <dt className="settings-dl-term">Email</dt>
+              <dd className="settings-dl-def settings-dl-def-email" title={email ?? undefined}>
+                {email ?? 'Unavailable'}
+              </dd>
+            </div>
+          </dl>
         </article>
 
         <article className="card settings-card">
-          <h2 className="card-title">Workspace</h2>
-          <p className="settings-note">Coaching mode for forms, quick topics, and AI tone.</p>
-          {!profile && <p className="settings-note">Loading workspace…</p>}
+          <h2 className="card-title settings-section-title">Workspace</h2>
+          <p className="settings-section-lead">
+            Choose the coaching experience that fits your team. Switch between specialized environments to tailor
+            TrackoraAI to your workplace.
+          </p>
+          {!profile && (
+            <p className="settings-empty-state" role="status">
+              Loading your workspace…
+            </p>
+          )}
           {profile && (
             <>
-              <div className="settings-row settings-row-stacked">
-                <span className="settings-label">Current workspace</span>
-                <span className="settings-value">{WORKSPACE_LABEL[profile.coaching_workspace]}</span>
-              </div>
+              <dl className="settings-dl settings-dl--compact">
+                <div className="settings-dl-row">
+                  <dt className="settings-dl-term">Current workspace</dt>
+                  <dd className="settings-dl-def">{WORKSPACE_LABEL[profile.coaching_workspace]}</dd>
+                </div>
+              </dl>
               <label className="workspace-settings-field">
-                <span className="settings-label">Change workspace</span>
+                <span className="settings-field-label">Coaching environment</span>
                 <select
                   className="workspace-settings-select"
                   value={profile.coaching_workspace}
                   onChange={(e) => void handleWorkspaceChange(e.target.value)}
                   disabled={workspaceBusy || !supabase}
-                  aria-label="Change coaching workspace"
+                  aria-label="Select coaching environment"
                 >
                   <option value="mobile_sales">{WORKSPACE_LABEL.mobile_sales}</option>
                   <option value="general_workplace">{WORKSPACE_LABEL.general_workplace}</option>
                 </select>
               </label>
-              {workspaceBusy && <p className="settings-note">Saving…</p>}
+              <p className="settings-workspace-hint">
+                Changing your workspace updates suggested topics, prompts, and the wording in your generated forms.
+              </p>
+              {workspaceBusy && <p className="settings-inline-status">Saving…</p>}
               {workspaceError && <p className="settings-error">{workspaceError}</p>}
             </>
           )}
         </article>
 
-        <article className="card settings-card">
-          <h2 className="card-title">Security</h2>
-          <p className="settings-note">We’ll email you a secure link to set a new password.</p>
-          <button
-            type="button"
-            className="btn-secondary settings-btn"
-            onClick={() => void handleChangePassword()}
-            disabled={passwordLoading}
-          >
-            {passwordLoading ? 'Sending reset email…' : 'Change Password'}
-          </button>
-          {passwordError && <p className="settings-error">{passwordError}</p>}
-          {passwordInfo && <p className="settings-note">{passwordInfo}</p>}
-        </article>
+        <article className="card settings-card settings-card--subscription">
+          <h2 className="card-title settings-section-title">Subscription</h2>
+          <p className="settings-section-lead">Plan, usage, and billing.</p>
 
-        <article className="card settings-card">
-          <h2 className="card-title">Subscription</h2>
-          <div className="settings-row">
-            <span className="settings-label">Current Plan</span>
-            <span className={'settings-pill ' + planPillClass}>{planLabel}</span>
+          <div className="settings-plan-hero">
+            <div className="settings-plan-hero-main">
+              <span className="settings-field-label">Current plan</span>
+              <div className="settings-plan-hero-row">
+                <span className={'settings-pill settings-pill--lg ' + planPillClass}>{planLabel}</span>
+                <span className="settings-plan-status">{subscriptionStatusLabel}</span>
+              </div>
+            </div>
           </div>
+
           {profile && isOwnerFreePro(email ?? profile.email) && (
-            <p className="settings-founder-note">Founder access — full Elite capabilities.</p>
+            <p className="settings-founder-badge">Founder access — full Elite capabilities.</p>
           )}
-          <div className="settings-row">
-            <span className="settings-label">Status</span>
-            <span className="settings-value">{subscriptionStatusLabel}</span>
-          </div>
-          <div className="settings-row settings-row-stacked">
-            <span className="settings-label">Usage</span>
-            <span className="settings-value">{usageLabel}</span>
-          </div>
-          {refinementLabel && (
-            <div className="settings-row settings-row-stacked">
-              <span className="settings-label">Refinements</span>
-              <span className="settings-value settings-value-subtle">{refinementLabel}</span>
-            </div>
+
+          {loading && (
+            <p className="settings-empty-state" role="status">
+              Loading account data…
+            </p>
           )}
-          {loading && <p className="settings-note">Loading account data...</p>}
           {error && <p className="settings-error">{error}</p>}
-          {currentPeriodEndLabel && (
-            <div className="settings-row settings-row-stacked">
-              <span className="settings-label">{cancelAtPeriodEndLikely ? 'Access until' : 'Renews on'}</span>
-              <span className="settings-value">{currentPeriodEndLabel}</span>
-            </div>
+
+          {!loading && (
+            <ul className="settings-stat-list" aria-label="Usage and billing dates">
+              <li>
+                <span className="settings-stat-label">Usage</span>
+                <span className="settings-stat-value">{usageLabel}</span>
+              </li>
+              {refinementLabel && (
+                <li>
+                  <span className="settings-stat-label">Refinements</span>
+                  <span className="settings-stat-value settings-stat-value--muted">{refinementLabel}</span>
+                </li>
+              )}
+              {currentPeriodEndLabel && (
+                <li>
+                  <span className="settings-stat-label">
+                    {cancelAtPeriodEndLikely ? 'Access until' : 'Renews on'}
+                  </span>
+                  <span className="settings-stat-value">{currentPeriodEndLabel}</span>
+                </li>
+              )}
+            </ul>
           )}
+
           {canManageSubscription ? (
-            <>
-              <p className="settings-note">Update payment method, cancel, or manage billing in Stripe.</p>
+            <div className="settings-subscription-actions">
+              <p className="settings-action-hint">Payment method, invoices, and cancellation in Stripe.</p>
               <button
                 type="button"
-                className="btn-secondary settings-btn"
+                className="btn-secondary settings-btn settings-btn--lg"
                 onClick={() => void handleManageSubscription()}
                 disabled={portalLoading}
               >
-                {portalLoading ? 'Opening portal…' : 'Manage Subscription'}
+                {portalLoading ? 'Opening portal…' : 'Manage subscription'}
               </button>
               {portalError && <p className="settings-error">{portalError}</p>}
-            </>
+            </div>
           ) : (
-            <>
-              <p className="settings-note">Pro includes unlimited forms and 25 refinements monthly. Elite adds unlimited refinements ($11.99/mo).</p>
+            <div className="settings-subscription-actions">
+              <ul className="settings-perk-list">
+                <li>
+                  <strong>Pro</strong> — Unlimited forms, 25 refinements per month ($8.99/mo).
+                </li>
+                <li>
+                  <strong>Elite</strong> — Unlimited refinements ($11.99/mo).
+                </li>
+              </ul>
               <p className="settings-elite-proration-hint">
                 {
-                  'Upgrade to Elite — you\u2019ll only pay the prorated difference today. On Pro, we update your existing subscription (no second subscription).'
+                  'Elite upgrade: pay only today\u2019s prorated difference. On Pro, your existing subscription is updated (no second subscription).'
                 }
               </p>
-              <div className="settings-upgrade-row">
+              <div className="settings-upgrade-grid">
                 <button
                   type="button"
-                  className="btn-primary settings-btn"
+                  className="btn-primary settings-btn settings-btn--lg"
                   onClick={() => void handleUpgrade('pro')}
                   disabled={checkoutLoading}
                 >
@@ -377,41 +426,162 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
                 </button>
                 <button
                   type="button"
-                  className="btn-secondary settings-btn"
+                  className="btn-secondary settings-btn settings-btn--lg"
                   onClick={() => void handleUpgrade('elite')}
                   disabled={checkoutLoading}
                 >
                   {checkoutLoading ? 'Opening checkout…' : 'Upgrade to Elite — $11.99'}
                 </button>
               </div>
-              {eliteInfoMsg && <p className="settings-note">{eliteInfoMsg}</p>}
+              {eliteInfoMsg && <p className="settings-inline-status">{eliteInfoMsg}</p>}
               {checkoutError && <p className="settings-error">{checkoutError}</p>}
-            </>
+            </div>
           )}
         </article>
 
         <article className="card settings-card">
-          <h2 className="card-title">Session</h2>
-          <p className="settings-note">End your current session on this device.</p>
-          <button type="button" className="btn-secondary settings-btn settings-signout" onClick={() => void onSignOut()}>
-            Sign Out
-          </button>
+          <h2 className="card-title settings-section-title">Security</h2>
+          <p className="settings-section-lead">Password and this device.</p>
+          <div className="settings-stack-block">
+            <span className="settings-field-label">Password</span>
+            <p className="settings-block-hint">We&apos;ll email you a secure link to set a new password.</p>
+            <button
+              type="button"
+              className="btn-secondary settings-btn settings-btn--lg"
+              onClick={() => void handleChangePassword()}
+              disabled={passwordLoading}
+            >
+              {passwordLoading ? 'Sending reset email…' : 'Change password'}
+            </button>
+            {passwordError && <p className="settings-error">{passwordError}</p>}
+            {passwordInfo && <p className="settings-inline-status">{passwordInfo}</p>}
+          </div>
+          <div className="settings-card-divider" role="presentation" />
+          <div className="settings-stack-block">
+            <span className="settings-field-label">Session</span>
+            <p className="settings-block-hint">Sign out on this device only.</p>
+            <button
+              type="button"
+              className="btn-secondary settings-btn settings-btn--lg settings-signout"
+              onClick={() => void onSignOut()}
+            >
+              Sign Out
+            </button>
+          </div>
         </article>
 
         <article className="card settings-card settings-support-card">
-          <h2 className="card-title">Support</h2>
+          <h2 className="card-title settings-section-title">Support</h2>
+          <p className="settings-section-lead">Replay onboarding when you need a refresher.</p>
           <button
             type="button"
-            className="btn-secondary settings-btn settings-support-btn"
+            className="btn-secondary settings-btn settings-btn--lg settings-support-btn"
             onClick={() => void handleViewTutorial()}
             disabled={tutorialReplayLoading}
           >
             {tutorialReplayLoading ? 'Resetting…' : 'Restart tutorial'}
           </button>
-          <p className="settings-help-caption">Clears the one-time flag so the onboarding shows again on Coaching.</p>
+          <p className="settings-help-caption">Clears the one-time flag so the walkthrough shows again in Coaching.</p>
           {tutorialReplayError && <p className="settings-error">{tutorialReplayError}</p>}
         </article>
+
+        <article className="card settings-card settings-legal-card">
+          <h2 className="card-title settings-section-title">Legal</h2>
+          <p className="settings-section-lead">
+            Policies, feedback, and how to reach BryantLabs.Dev.
+          </p>
+          <div className="settings-legal-actions">
+            <div className="settings-legal-block">
+              <span className="settings-legal-block-label">Privacy Policy</span>
+              <button
+                type="button"
+                className="settings-legal-privacy-btn settings-legal-privacy-btn--wide"
+                onClick={() => setPrivacyModalOpen(true)}
+              >
+                View Privacy Policy
+              </button>
+              <p className="settings-legal-privacy-hint">
+                Same document as the{' '}
+                <a href="/privacy" className="settings-legal-inline-link">
+                  public /privacy page
+                </a>
+                .
+              </p>
+            </div>
+
+            <div className="settings-legal-block">
+              <span className="settings-legal-block-label">Terms of Service</span>
+              <a
+                href="/terms"
+                className="settings-legal-privacy-btn settings-legal-privacy-btn--wide settings-legal-doc-anchor"
+              >
+                View Terms of Service
+              </a>
+              <p className="settings-legal-privacy-hint">
+                Same document as the{' '}
+                <a href="/terms" className="settings-legal-inline-link">
+                  public /terms page
+                </a>
+                .
+              </p>
+            </div>
+
+            <div className="settings-legal-block">
+              <span className="settings-legal-block-label">Feedback</span>
+              <p className="settings-legal-intro">
+                Questions, ideas, or issues? Send feedback directly to BryantLabs.Dev.
+              </p>
+              <button
+                type="button"
+                className="btn-secondary settings-btn settings-btn--lg"
+                onClick={() => window.dispatchEvent(new CustomEvent('trackora-open-feedback'))}
+              >
+                Send Feedback
+              </button>
+            </div>
+
+            <div className="settings-legal-contact-block">
+              <span className="settings-legal-block-label">Contact</span>
+              <a className="settings-legal-contact-mail" href="mailto:Bryantlabs.dev@gmail.com">
+                Bryantlabs.dev@gmail.com
+              </a>
+            </div>
+          </div>
+        </article>
       </section>
+
+      {privacyModalOpen && (
+        <div
+          className="settings-privacy-overlay"
+          role="presentation"
+          onClick={() => setPrivacyModalOpen(false)}
+        >
+          <div
+            className="settings-privacy-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="privacy-policy-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="settings-privacy-toolbar">
+              <span className="settings-privacy-toolbar-label">TrackoraAI</span>
+              <button
+                type="button"
+                className="settings-privacy-close"
+                onClick={() => setPrivacyModalOpen(false)}
+                aria-label="Close privacy policy"
+              >
+                Close
+              </button>
+            </div>
+            <div className="settings-privacy-scroll">
+              <article className="card privacy-card settings-privacy-card">
+                <PrivacyPolicyContent />
+              </article>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }

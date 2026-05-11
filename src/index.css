@@ -68,3 +68,45 @@ textarea:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* Inline legal row — landing, ads, auth (minimal · separators) */
+.legal-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem 0.45rem;
+  font-size: 0.8125rem;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+}
+
+.legal-row a {
+  color: rgba(148, 163, 184, 0.92);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.legal-row a:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.legal-row a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.legal-row__sep {
+  color: rgba(148, 163, 184, 0.35);
+  user-select: none;
+  font-weight: 400;
+}
+
+.legal-row__muted {
+  color: rgba(148, 163, 184, 0.45);
+  font-weight: 500;
+  cursor: default;
+}

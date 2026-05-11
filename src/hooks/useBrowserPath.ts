@@ -26,6 +26,8 @@ export type AppRoute =
   | 'login'
   | 'signup'
   | 'reset-password'
+  | 'privacy'
+  | 'terms'
   | 'app'
   | 'other'
 
@@ -38,5 +40,7 @@ export function normalizeAppRoute(pathname: string): AppRoute {
   if (p === '/login') return 'login'
   if (p === '/signup') return 'signup'
   if (p === '/reset-password') return 'reset-password'
+  if (p === '/privacy' || p.startsWith('/privacy/')) return 'privacy'
+  if (p === '/terms' || p.startsWith('/terms/')) return 'terms'
   return 'other'
 }

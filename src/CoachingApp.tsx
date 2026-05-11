@@ -1861,7 +1861,11 @@ export default function CoachingApp() {
       </div>
 
       <p className="fine-print">
-        Your notes are sent securely to generate your form — ready to copy, save, or share with your team.
+        Your notes are sent securely to generate your form — ready to copy, save, or share with your team.{' '}
+        <a href="/privacy" className="fine-print-link">
+          Privacy Policy
+        </a>
+        .
       </p>
 
       {tutorialPhase === 'walkthrough' && (

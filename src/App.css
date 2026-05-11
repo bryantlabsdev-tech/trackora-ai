@@ -1886,6 +1886,16 @@ a.btn-plan-upgrade:hover {
   color: var(--muted);
 }
 
+.fine-print-link {
+  color: var(--accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+.fine-print-link:hover {
+  color: #fff;
+}
+
 .fine-print code {
   padding: 0.12rem 0.35rem;
   border-radius: 6px;

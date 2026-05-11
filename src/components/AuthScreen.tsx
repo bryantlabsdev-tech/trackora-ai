@@ -245,6 +245,17 @@ export default function AuthScreen({ client, defaultMode = 'signin', onBack }: P
             </ul>
           )}
         </form>
+        <nav className="legal-row auth-legal-row" aria-label="Legal and contact">
+          <a href="/privacy">Privacy Policy</a>
+          <span className="legal-row__sep" aria-hidden>
+            ·
+          </span>
+          <a href="/terms">Terms of Service</a>
+          <span className="legal-row__sep" aria-hidden>
+            ·
+          </span>
+          <a href="mailto:Bryantlabs.dev@gmail.com">Contact</a>
+        </nav>
       </div>
     </div>
   )

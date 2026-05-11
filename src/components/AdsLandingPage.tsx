@@ -203,7 +203,20 @@ export default function AdsLandingPage() {
       </main>
 
       <footer className="landing-footer">
-        <p className="landing-footer-copy">TrackoraAI — coaching forms for high-performing teams.</p>
+        <nav className="legal-row landing-footer-legal" aria-label="Legal and contact">
+          <a href="/privacy">Privacy Policy</a>
+          <span className="legal-row__sep" aria-hidden>
+            ·
+          </span>
+          <a href="/terms">Terms of Service</a>
+          <span className="legal-row__sep" aria-hidden>
+            ·
+          </span>
+          <a href="mailto:Bryantlabs.dev@gmail.com">Contact</a>
+        </nav>
+        <p className="landing-footer-copy">
+          TrackoraAI — coaching forms for high-performing teams. · BryantLabs.Dev
+        </p>
       </footer>
     </div>
   )

@@ -8,6 +8,8 @@ import AccountSettings from './components/AccountSettings'
 import AuthScreen from './components/AuthScreen'
 import LandingPage from './components/LandingPage'
 import AdsLandingPage from './components/AdsLandingPage'
+import PrivacyPolicyPage from './components/PrivacyPolicyPage'
+import TermsOfServicePage from './components/TermsOfServicePage'
 import ResetPasswordScreen from './components/ResetPasswordScreen'
 import FeedbackFab from './components/FeedbackFab'
 import { PostTutorialFeedbackNudgeProvider } from './context/PostTutorialFeedbackNudgeContext'
@@ -76,6 +78,14 @@ export default function App() {
   }
 
   const client = supabase
+
+  if (route === 'privacy') {
+    return <PrivacyPolicyPage />
+  }
+
+  if (route === 'terms') {
+    return <TermsOfServicePage />
+  }
 
   if (route === 'reset-password') {
     return (

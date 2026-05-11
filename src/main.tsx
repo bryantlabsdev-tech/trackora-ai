@@ -10,6 +10,14 @@ function isCheckoutSuccessPath(pathname: string): boolean {
   return pathname === '/success' || pathname.endsWith('/success')
 }
 
+function isPublicPrivacyPath(pathname: string): boolean {
+  return pathname === '/privacy' || pathname.startsWith('/privacy/')
+}
+
+function isPublicTermsPath(pathname: string): boolean {
+  return pathname === '/terms' || pathname.startsWith('/terms/')
+}
+
 function shouldShowMobileSplash(): boolean {
   if (typeof window === 'undefined') return false
   return window.matchMedia('(max-width: 639px)').matches
@@ -19,6 +27,8 @@ function Root() {
   const [splashPhase, setSplashPhase] = useState<'off' | 'visible' | 'exiting'>(() => {
     if (typeof window === 'undefined') return 'off'
     if (isCheckoutSuccessPath(window.location.pathname)) return 'off'
+    if (isPublicPrivacyPath(window.location.pathname)) return 'off'
+    if (isPublicTermsPath(window.location.pathname)) return 'off'
     return shouldShowMobileSplash() ? 'visible' : 'off'
   })
 

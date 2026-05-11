@@ -304,7 +304,20 @@ export default function LandingPage() {
       </main>
 
       <footer className="landing-footer">
-        <p className="landing-footer-copy">© {new Date().getFullYear()} TrackoraAI</p>
+        <nav className="legal-row landing-footer-legal" aria-label="Legal and contact">
+          <a href="/privacy">Privacy Policy</a>
+          <span className="legal-row__sep" aria-hidden>
+            ·
+          </span>
+          <a href="/terms">Terms of Service</a>
+          <span className="legal-row__sep" aria-hidden>
+            ·
+          </span>
+          <a href="mailto:Bryantlabs.dev@gmail.com">Contact</a>
+        </nav>
+        <p className="landing-footer-copy">
+          © {new Date().getFullYear()} TrackoraAI · BryantLabs.Dev
+        </p>
       </footer>
     </div>
   )
