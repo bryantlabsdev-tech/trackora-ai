@@ -1,6 +1,9 @@
 import { profileRowGrantsPremium } from './billingSubscription.mjs'
 
-/** Private allowlist: exactly these accounts get Pro capability without Stripe (server must use JWT email). */
+/**
+ * Private allowlist: these accounts get full paid capability without Stripe (JWT email).
+ * Product tier resolves to **Elite** in `shared/planAccess.mjs` (unlimited refinements + founder access).
+ */
 export const OWNER_FREE_PRO_EMAILS = ['ferrisbryant17@yahoo.com']
 
 /**

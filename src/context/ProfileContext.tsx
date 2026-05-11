@@ -16,6 +16,7 @@ type ProfileContextValue = {
   error: string | null
   refresh: () => Promise<void>
   applyUsageSnapshot: (snapshot: { usageCount: number; isPro: boolean }) => void
+  applyRefinementSnapshot: (snapshot: { refinement_count: number; refinement_month: string | null }) => void
   completeTutorial: () => Promise<boolean>
   replayTutorialFromSettings: () => Promise<boolean>
   acknowledgePaywallSeen: () => Promise<boolean>
@@ -104,6 +105,22 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
     })
   }, [])
 
+  const applyRefinementSnapshot = useCallback(
+    (snapshot: { refinement_count: number; refinement_month: string | null }) => {
+      setProfile((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          refinement_count: Number.isFinite(snapshot.refinement_count)
+            ? Math.max(0, Math.trunc(snapshot.refinement_count))
+            : prev.refinement_count ?? 0,
+          refinement_month: snapshot.refinement_month ?? prev.refinement_month ?? null,
+        }
+      })
+    },
+    [],
+  )
+
   const completeTutorial = useCallback(async () => {
     const result = await markTutorialSeen(client)
     await refresh()
@@ -129,6 +146,7 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
       error,
       refresh,
       applyUsageSnapshot,
+      applyRefinementSnapshot,
       completeTutorial,
       replayTutorialFromSettings,
       acknowledgePaywallSeen,
@@ -139,6 +157,7 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
       error,
       refresh,
       applyUsageSnapshot,
+      applyRefinementSnapshot,
       completeTutorial,
       replayTutorialFromSettings,
       acknowledgePaywallSeen,

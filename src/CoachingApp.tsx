@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CoachingApiError, FreeLimitReachedError, requestCoachingLog } from './api/requestCoachingLog'
-import { requestRefineSection } from './api/requestRefineSection'
+import {
+  RefinementMonthlyLimitError,
+  RefinementRequiresProError,
+  requestRefineSection,
+} from './api/requestRefineSection'
 import { useProfile } from './context/ProfileContext'
 import { usePostTutorialFeedbackNudge } from './context/PostTutorialFeedbackNudgeContext'
 import type {
@@ -12,11 +16,17 @@ import type {
 } from './types/coaching'
 import { COACHING_FORM_SECTION_LABELS } from './types/coaching'
 import {
+  FREE_AI_GENERATION_LIMIT,
+  PRO_MONTHLY_REFINEMENT_LIMIT,
   canUseAiGeneration,
   freeGenerationsRemaining,
   freeGenerationsRemainingLabel,
+  getPlanDisplayLabel,
+  getRefinementQuotaForProfile,
   hasPremiumAccess,
+  isElitePlan,
   isFreeLimitReached,
+  isOwnerFreePro,
 } from './types/profile'
 import {
   copyPlainTextToClipboard,
@@ -34,9 +44,17 @@ type UpgradeToProButtonProps = {
   email: string
   /** Defaults to "Upgrade to Pro" — use "Unlock Pro" on free-limit surfaces */
   ctaLabel?: string
+  checkoutPlan?: 'pro' | 'elite'
+  variant?: 'primary' | 'outline'
 }
 
-function UpgradeToProButton({ userId, email, ctaLabel }: UpgradeToProButtonProps) {
+function UpgradeToProButton({
+  userId,
+  email,
+  ctaLabel,
+  checkoutPlan = 'pro',
+  variant = 'primary',
+}: UpgradeToProButtonProps) {
   const [checkoutLoading, setCheckoutLoading] = useState(false)
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
 
@@ -57,6 +75,7 @@ function UpgradeToProButton({ userId, email, ctaLabel }: UpgradeToProButtonProps
       const payload = {
         userId: trimmedUserId,
         email: email.trim(),
+        planTier: checkoutPlan,
       }
 
       const res = await fetch(getCreateCheckoutSessionUrl(), {
@@ -81,11 +100,16 @@ function UpgradeToProButton({ userId, email, ctaLabel }: UpgradeToProButtonProps
     }
   }
 
+  const btnClass =
+    variant === 'outline'
+      ? 'btn-secondary btn-plan-upgrade btn-plan-upgrade--outline'
+      : 'btn-primary btn-plan-upgrade'
+
   return (
     <div className="upgrade-checkout-wrap">
       <button
         type="button"
-        className="btn-primary btn-plan-upgrade"
+        className={btnClass}
         disabled={checkoutLoading}
         onClick={() => void startCheckout()}
       >
@@ -107,13 +131,24 @@ const SESSION_PAYWALL_SHOWN_KEY = 'trackora_paywall_shown_this_session'
 /** Free-tier exhausted: headline + body (typographic apostrophe in “You’ve” for web/mobile). */
 const FREE_LIMIT_HEADLINE = 'You\u2019ve reached the free limit'
 const FREE_LIMIT_BODY =
-  'Upgrade to Pro to generate unlimited professional coaching and recognition forms instantly.'
+  'Upgrade to Pro for unlimited coaching form generations, monthly AI section refinements, and professional retail-ready drafts.'
 
-const PAYWALL_BULLETS = [
-  'Unlimited AI generations',
-  'Professional coaching + recognition forms',
-  'Faster documentation for leaders',
+const PAYWALL_PRO_BULLETS = [
+  'Unlimited coaching forms',
+  '25 AI section refinements monthly',
+  'Professional coaching + recognition drafts',
 ] as const
+
+const PAYWALL_ELITE_BULLETS = [
+  'Unlimited coaching forms',
+  'Unlimited AI refinements',
+  'Future premium workflow features included',
+  'Built for power users and leaders who refine often',
+] as const
+
+const REFINEMENT_LIMIT_HEADLINE = 'You\u2019ve reached your monthly refinement limit.'
+const REFINEMENT_LIMIT_SUBTEXT =
+  'Upgrade to Elite ($11.99/month) for unlimited AI section refinements and future workflow features.'
 
 const TUTORIAL_SAMPLE: SimpleCoachingInput = {
   employeeName: 'Alex Rivera',
@@ -149,7 +184,7 @@ const TUTORIAL_STEPS: TutorialStep[] = [
   },
   {
     title: 'Unlock unlimited when you’re ready',
-    body: 'Upgrade to Pro for unlimited generations whenever your team needs documentation on the floor.',
+    body: 'Choose Pro or Elite for unlimited coaching forms; Elite adds unlimited refinements for teams that iterate often.',
   },
 ]
 
@@ -428,6 +463,7 @@ export default function CoachingApp() {
     loading: profileLoading,
     error: profileError,
     applyUsageSnapshot,
+    applyRefinementSnapshot,
     completeTutorial,
     refresh,
   } = useProfile()
@@ -442,6 +478,7 @@ export default function CoachingApp() {
   const [loading, setLoading] = useState(false)
   const [lastGenerationMs, setLastGenerationMs] = useState<number | null>(null)
   const [showLimitPaywall, setShowLimitPaywall] = useState(false)
+  const [showRefinementLimitModal, setShowRefinementLimitModal] = useState(false)
   /** Per-section copy feedback, keyed by `${sec.id}-${index}` */
   const [copiedSectionKeys, setCopiedSectionKeys] = useState<Record<string, boolean>>({})
   const [showWarmupNotice, setShowWarmupNotice] = useState(false)
@@ -488,6 +525,15 @@ export default function CoachingApp() {
   useEffect(() => {
     if (profile && hasPremiumAccess(profile)) setShowLimitPaywall(false)
   }, [profile])
+
+  const refinementQuota = useMemo(
+    () => getRefinementQuotaForProfile(profile, profile?.email ?? null),
+    [profile],
+  )
+
+  useEffect(() => {
+    if (refinementQuota.canRefine) setShowRefinementLimitModal(false)
+  }, [refinementQuota.canRefine])
 
   const dismissTutorialChrome = useCallback(() => {
     setTutorialPhase('off')
@@ -741,6 +787,9 @@ export default function CoachingApp() {
             isPro: result.usage.isPro,
           })
         }
+        if (result.refinementSnapshot) {
+          applyRefinementSnapshot(result.refinementSnapshot)
+        }
         setRefineOpenRowKey(null)
         setRefinePresetPick(null)
         setRefineCustomText('')
@@ -764,6 +813,14 @@ export default function CoachingApp() {
           }
           return
         }
+        if (err instanceof RefinementMonthlyLimitError) {
+          setShowRefinementLimitModal(true)
+          return
+        }
+        if (err instanceof RefinementRequiresProError) {
+          setShowLimitPaywall(true)
+          return
+        }
         if (err instanceof CoachingApiError) {
           setGenerationError(err.message)
           return
@@ -773,7 +830,15 @@ export default function CoachingApp() {
         setRefiningRowKey(null)
       }
     },
-    [logText, refinePresetPick, refineCustomText, formMode, input.employeeName, applyUsageSnapshot],
+    [
+      logText,
+      refinePresetPick,
+      refineCustomText,
+      formMode,
+      input.employeeName,
+      applyUsageSnapshot,
+      applyRefinementSnapshot,
+    ],
   )
 
   const applyQuickTopicById = useCallback((id: string) => {
@@ -829,16 +894,71 @@ export default function CoachingApp() {
             </p>
           )}
           {profile && !profileLoading && hasPremiumAccess(profile) && (
-            <div className="plan-pro-card" aria-live="polite">
-              <span className="plan-pro-title">Pro Plan Active</span>
-              <span className="plan-pro-subtext">Unlimited AI generations</span>
+            <div
+              className={
+                'plan-pro-card' + (isElitePlan(profile, profile.email) ? ' plan-pro-card--elite' : '')
+              }
+              aria-live="polite"
+            >
+              <div className="plan-pro-card-head">
+                <span className="plan-pro-title">{getPlanDisplayLabel(profile, profile.email)} plan</span>
+                {isOwnerFreePro(profile.email) ? (
+                  <span className="plan-founder-note">Founder access</span>
+                ) : null}
+              </div>
+              <span className="plan-pro-subtext">Unlimited coaching forms</span>
+              <span className="plan-pro-refinement">{refinementQuota.label}</span>
             </div>
           )}
           {profile && !profileLoading && !hasPremiumAccess(profile) && (
-            <div className="plan-row" aria-live="polite">
-              <span className="plan-badge">Free</span>
-              <span className="plan-detail">{freeGenerationsRemainingLabel(profile)}</span>
-            </div>
+            <>
+              <div className="plan-row" aria-live="polite">
+                <span className="plan-badge">Free</span>
+                <span className="plan-detail">{freeGenerationsRemainingLabel(profile)}</span>
+              </div>
+              <div className="plan-pricing-tiers" aria-label="Plans">
+                <div className="plan-tier-card">
+                  <span className="plan-tier-name">Free</span>
+                  <span className="plan-tier-price">$0</span>
+                  <ul className="plan-tier-list">
+                    <li>{FREE_AI_GENERATION_LIMIT} coaching generations</li>
+                    <li>No section refinements</li>
+                  </ul>
+                </div>
+                <div className="plan-tier-card plan-tier-card--pro">
+                  <span className="plan-tier-name">Pro</span>
+                  <span className="plan-tier-price">$8.99/mo</span>
+                  <ul className="plan-tier-list">
+                    {PAYWALL_PRO_BULLETS.map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                  <UpgradeToProButton
+                    userId={profile.id}
+                    email={profile.email}
+                    checkoutPlan="pro"
+                    variant="outline"
+                    ctaLabel="Choose Pro"
+                  />
+                </div>
+                <div className="plan-tier-card plan-tier-card--elite">
+                  <span className="plan-tier-name">Elite</span>
+                  <span className="plan-tier-price">$11.99/mo</span>
+                  <ul className="plan-tier-list">
+                    {PAYWALL_ELITE_BULLETS.map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                  <UpgradeToProButton
+                    userId={profile.id}
+                    email={profile.email}
+                    checkoutPlan="elite"
+                    variant="outline"
+                    ctaLabel="Choose Elite"
+                  />
+                </div>
+              </div>
+            </>
           )}
           <label className={'field' + (tutorialHighlightQuickTopics ? ' tutorial-field-highlight' : '')}>
             <span className="label-text">Quick coaching topics</span>
@@ -953,12 +1073,22 @@ export default function CoachingApp() {
               </div>
               <p className="plan-limit-text plan-limit-text--compact">{FREE_LIMIT_BODY}</p>
               <ul className="plan-limit-bullets">
-                {PAYWALL_BULLETS.map((line) => (
+                {PAYWALL_PRO_BULLETS.map((line) => (
                   <li key={line}>{line}</li>
                 ))}
               </ul>
+              <p className="plan-limit-extra">Need unlimited refinements? Elite includes unlimited AI refinements ($11.99/mo).</p>
               <p className="plan-limit-trust-mini">Cancel anytime from Settings.</p>
-              <UpgradeToProButton userId={profile.id} email={profile.email} ctaLabel="Unlock Pro" />
+              <div className="plan-limit-checkout-row">
+                <UpgradeToProButton userId={profile.id} email={profile.email} checkoutPlan="pro" ctaLabel="Unlock Pro — $8.99" />
+                <UpgradeToProButton
+                  userId={profile.id}
+                  email={profile.email}
+                  checkoutPlan="elite"
+                  variant="outline"
+                  ctaLabel="Unlock Elite — $11.99"
+                />
+              </div>
             </div>
           )}
         </section>
@@ -1091,7 +1221,9 @@ export default function CoachingApp() {
                     const canCopy = sectionClipboardHasContent(sec.id, sec.body)
                     const title = documentSectionTitle(sec.id)
                     const canRefine =
-                      tutorialPhase === 'off' && REFINABLE_SECTION_IDS.has(sec.id)
+                      tutorialPhase === 'off' &&
+                      REFINABLE_SECTION_IDS.has(sec.id) &&
+                      refinementQuota.canRefine
                     const sectionLabel = sec.id as CoachingFormSectionLabel
                     const applyDisabled =
                       refiningRowKey !== null ||
@@ -1322,6 +1454,44 @@ export default function CoachingApp() {
         </div>
       )}
 
+      {showRefinementLimitModal && profile && (
+        <div className="paywall-modal-root" role="presentation">
+          <button
+            type="button"
+            className="paywall-modal-backdrop"
+            aria-label="Close refinement limit notice"
+            onClick={() => setShowRefinementLimitModal(false)}
+          />
+          <div
+            className="paywall-modal card paywall-modal--premium paywall-modal--refinement"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="refinement-limit-title"
+          >
+            <div className="paywall-modal-head">
+              <span className="paywall-pro-badge" aria-hidden>
+                <span className="paywall-pro-badge-icon">✦</span>
+                Pro
+              </span>
+              <h2 id="refinement-limit-title" className="paywall-title">
+                {REFINEMENT_LIMIT_HEADLINE}
+              </h2>
+            </div>
+            <p className="paywall-body">{REFINEMENT_LIMIT_SUBTEXT}</p>
+            <p className="paywall-trust">Your coaching forms are unlimited — only section refinements reset each month.</p>
+            <div className="paywall-actions">
+              <button
+                type="button"
+                className="btn-primary btn-plan-upgrade"
+                onClick={() => setShowRefinementLimitModal(false)}
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showLimitPaywall && profile && !hasPremiumAccess(profile) && (
         <div className="paywall-modal-root" role="presentation">
           <button
@@ -1332,24 +1502,35 @@ export default function CoachingApp() {
           />
           <div className="paywall-modal card paywall-modal--premium" role="dialog" aria-modal="true" aria-labelledby="paywall-title">
             <div className="paywall-modal-head">
-              <span className="paywall-pro-badge" aria-hidden>
-                <span className="paywall-pro-badge-icon">✦</span>
-                Pro
-              </span>
               <h2 id="paywall-title" className="paywall-title">
                 {FREE_LIMIT_HEADLINE}
               </h2>
             </div>
             <p className="paywall-body">{FREE_LIMIT_BODY}</p>
-            <ul className="paywall-feature-list">
-              {PAYWALL_BULLETS.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-            <p className="paywall-price-note">$8.99/month · Unlimited generations</p>
+            <div className="paywall-plan-pick" role="group" aria-label="Choose a plan">
+              <div className="paywall-plan-card paywall-plan-card--pro">
+                <span className="paywall-plan-kicker">Pro</span>
+                <p className="paywall-plan-price">$8.99<span className="paywall-plan-per">/mo</span></p>
+                <ul className="paywall-plan-list">
+                  {PAYWALL_PRO_BULLETS.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+                <UpgradeToProButton userId={profile.id} email={profile.email} checkoutPlan="pro" ctaLabel="Get Pro" />
+              </div>
+              <div className="paywall-plan-card paywall-plan-card--elite">
+                <span className="paywall-plan-kicker paywall-plan-kicker--elite">Elite</span>
+                <p className="paywall-plan-price">$11.99<span className="paywall-plan-per">/mo</span></p>
+                <ul className="paywall-plan-list">
+                  {PAYWALL_ELITE_BULLETS.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+                <UpgradeToProButton userId={profile.id} email={profile.email} checkoutPlan="elite" ctaLabel="Get Elite" />
+              </div>
+            </div>
             <p className="paywall-trust">Cancel anytime from Settings.</p>
             <div className="paywall-actions">
-              <UpgradeToProButton userId={profile.id} email={profile.email} ctaLabel="Unlock Pro" />
               <button
                 type="button"
                 className="btn-text paywall-secondary"

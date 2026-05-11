@@ -7,7 +7,7 @@ function mapRow(row: ProfileRow): Profile {
 }
 
 const PROFILE_COLUMNS =
-  'id, email, is_pro, usage_count, bonus_ai_generations, has_seen_tutorial, has_seen_paywall, tutorial_welcome_bonus_granted, stripe_customer_id, stripe_subscription_id, subscription_status, current_period_end, created_at'
+  'id, email, is_pro, plan_tier, usage_count, bonus_ai_generations, refinement_count, refinement_month, has_seen_tutorial, has_seen_paywall, tutorial_welcome_bonus_granted, stripe_customer_id, stripe_subscription_id, subscription_status, current_period_end, created_at'
 
 export async function fetchProfile(client: SupabaseClient, userId: string): Promise<Profile | null> {
   const { data, error } = await client.from('profiles').select(PROFILE_COLUMNS).eq('id', userId).maybeSingle()
@@ -21,12 +21,22 @@ export async function fetchProfile(client: SupabaseClient, userId: string): Prom
     has_seen_tutorial?: boolean
     has_seen_paywall?: boolean
     bonus_ai_generations?: number
+    plan_tier?: string
   }
+  const pt = String(raw.plan_tier ?? 'free').trim().toLowerCase()
+  const plan_tier: ProfileRow['plan_tier'] =
+    pt === 'elite' ? 'elite' : pt === 'pro' ? 'pro' : 'free'
   return mapRow({
     ...raw,
+    plan_tier,
     has_seen_tutorial: raw.has_seen_tutorial === true,
     has_seen_paywall: raw.has_seen_paywall === true,
     bonus_ai_generations: Math.max(0, Math.floor(Number(raw.bonus_ai_generations) || 0)),
+    refinement_count: Math.max(0, Math.floor(Number(raw.refinement_count ?? 0) || 0)),
+    refinement_month:
+      typeof raw.refinement_month === 'string' && raw.refinement_month.trim()
+        ? raw.refinement_month.trim()
+        : raw.refinement_month ?? null,
   })
 }
 

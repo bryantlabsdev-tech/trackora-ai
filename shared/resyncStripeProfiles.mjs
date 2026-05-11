@@ -1,4 +1,5 @@
 import { evaluateSubscriptionAccess } from './billingSubscription.mjs'
+import { inferBillingPlanTierFromSubscription } from './stripePlanTier.mjs'
 
 /**
  * @param {unknown} value
@@ -18,16 +19,22 @@ function pickStripeId(value) {
  *
  * @param {import('stripe').default} stripe
  * @param {import('@supabase/supabase-js').SupabaseClient} supabaseAdmin
- * @param {{ dryRun?: boolean; onProgress?: (e: Record<string, unknown>) => void }} [opts]
+ * @param {{ dryRun?: boolean; elitePriceId?: string; onProgress?: (e: Record<string, unknown>) => void }} [opts]
  * @returns {Promise<{ processed: number; updated: number; skipped: number; errors: number }>}
  */
 export async function resyncAllProfilesFromStripe(stripe, supabaseAdmin, opts = {}) {
   const dryRun = opts.dryRun === true
   const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : () => {}
+  const elitePriceId =
+    typeof opts.elitePriceId === 'string' && opts.elitePriceId.trim()
+      ? opts.elitePriceId.trim()
+      : typeof process.env.STRIPE_ELITE_PRICE_ID === 'string'
+        ? process.env.STRIPE_ELITE_PRICE_ID.trim()
+        : ''
 
   const { data: rows, error } = await supabaseAdmin
     .from('profiles')
-    .select('id, stripe_subscription_id, stripe_customer_id, is_pro, subscription_status')
+    .select('id, stripe_subscription_id, stripe_customer_id, is_pro, subscription_status, plan_tier')
     .or('stripe_subscription_id.not.is.null,stripe_customer_id.not.is.null')
 
   if (error) {
@@ -78,8 +85,10 @@ export async function resyncAllProfilesFromStripe(stripe, supabaseAdmin, opts = 
       const customerId = pickStripeId(subscription.customer) || customerIdRaw
       const subId = pickStripeId(subscription.id) || subscriptionId
 
+      const planTier = access.isPro ? inferBillingPlanTierFromSubscription(subscription, elitePriceId) : 'free'
       const updatePayload = {
         is_pro: access.isPro,
+        plan_tier: planTier,
         stripe_customer_id: customerId,
         stripe_subscription_id: subId,
         subscription_status: access.subscriptionStatus,
@@ -88,7 +97,8 @@ export async function resyncAllProfilesFromStripe(stripe, supabaseAdmin, opts = 
 
       const changed =
         row.is_pro !== updatePayload.is_pro ||
-        (row.subscription_status ?? null) !== (updatePayload.subscription_status ?? null)
+        (row.subscription_status ?? null) !== (updatePayload.subscription_status ?? null) ||
+        String(row.plan_tier ?? 'free') !== String(updatePayload.plan_tier)
 
       if (!changed) {
         skipped += 1
@@ -120,7 +130,13 @@ export async function resyncAllProfilesFromStripe(stripe, supabaseAdmin, opts = 
       }
 
       updated += 1
-      onProgress({ userId, updated: true, subscription_status: updatePayload.subscription_status, is_pro: updatePayload.is_pro })
+      onProgress({
+        userId,
+        updated: true,
+        subscription_status: updatePayload.subscription_status,
+        is_pro: updatePayload.is_pro,
+        plan_tier: updatePayload.plan_tier,
+      })
     } catch (e) {
       errors += 1
       const msg = typeof e?.message === 'string' ? e.message : 'unknown'

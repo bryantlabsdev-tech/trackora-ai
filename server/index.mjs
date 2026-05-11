@@ -28,8 +28,16 @@ import {
   coachingOutputViolatesTopicAnchor,
 } from '../shared/coachingTopicValidation.mjs'
 import { evaluateSubscriptionAccess, profileRowGrantsPremium } from '../shared/billingSubscription.mjs'
-import { effectivePremiumAccess } from '../shared/ownerFreePro.mjs'
+import { effectivePremiumAccess, isOwnerFreePro } from '../shared/ownerFreePro.mjs'
+import { canUseRefinements, isElitePlan, isProPlan } from '../shared/planAccess.mjs'
+import {
+  PRO_MONTHLY_REFINEMENT_LIMIT_DEFAULT,
+  effectiveRefinementCountThisMonth,
+  parseRefinementRow,
+  refinementMonthKeyUtc,
+} from '../shared/refinementQuota.mjs'
 import { resyncAllProfilesFromStripe } from '../shared/resyncStripeProfiles.mjs'
+import { inferBillingPlanTierFromSubscription } from '../shared/stripePlanTier.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const envFilePath = path.resolve(__dirname, '..', '.env')
@@ -47,10 +55,15 @@ const openai = openaiApiKey ? new OpenAI({ apiKey: openaiApiKey }) : null
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY?.trim() || ''
 const stripe = stripeSecretKey ? new Stripe(stripeSecretKey) : null
 const FREE_LIMIT = Number.parseInt(process.env.FREE_LIMIT || '3', 10)
+const PRO_MONTHLY_REFINEMENT_LIMIT =
+  Number.parseInt(process.env.PRO_MONTHLY_REFINEMENT_LIMIT || String(PRO_MONTHLY_REFINEMENT_LIMIT_DEFAULT), 10) ||
+  PRO_MONTHLY_REFINEMENT_LIMIT_DEFAULT
 const stripePriceId =
   process.env.STRIPE_PRICE_ID?.trim() ||
   process.env.STRIPE_PRO_PRICE_ID?.trim() ||
   'price_1TJaIIHG6iuq9JCNXyc4I5Hb'
+/** Set in Stripe + `.env` to enable Elite checkout and subscription tier sync (`STRIPE_ELITE_PRICE_ID`). */
+const stripeElitePriceId = process.env.STRIPE_ELITE_PRICE_ID?.trim() || ''
 
 const supabaseUrl = process.env.SUPABASE_URL?.trim() || ''
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || ''
@@ -149,8 +162,10 @@ async function syncSubscriptionToUser(params) {
     return { ok: false, skipped: 'profile_not_found' }
   }
 
+  const planTier = access.isPro ? inferBillingPlanTierFromSubscription(subscription, stripeElitePriceId) : 'free'
   const updatePayload = {
     is_pro: access.isPro,
+    plan_tier: planTier,
     stripe_customer_id: customerId,
     stripe_subscription_id: subscriptionId,
     subscription_status: access.subscriptionStatus,
@@ -181,6 +196,7 @@ async function syncSubscriptionToUser(params) {
     eventType,
     profileId,
     is_pro: updatePayload.is_pro,
+    plan_tier: updatePayload.plan_tier,
     subscription_status: updatePayload.subscription_status,
     current_period_end: updatePayload.current_period_end,
   })
@@ -945,13 +961,97 @@ async function getAuthenticatedUserId(req) {
 async function getProfileForUser(userId) {
   const { data, error } = await supabaseAdmin
     .from('profiles')
-    .select('id, is_pro, usage_count, subscription_status, current_period_end')
+    .select(
+      'id, email, is_pro, plan_tier, usage_count, subscription_status, current_period_end, refinement_count, refinement_month',
+    )
     .eq('id', userId)
     .maybeSingle()
   if (error || !data) {
     return { profile: null, error: error?.message || 'Could not load profile.' }
   }
   return { profile: data, error: null }
+}
+
+/**
+ * Zero refinement_count when UTC calendar month changes (lazy monthly reset).
+ * @param {string} userId
+ * @param {Record<string, unknown>} profile
+ */
+async function ensureRefinementMonthReset(userId, profile) {
+  if (!supabaseAdmin || !profile) return profile
+  const currentMonth = refinementMonthKeyUtc()
+  const { monthKey } = parseRefinementRow(profile)
+  if (monthKey === currentMonth) return profile
+
+  const { data, error } = await supabaseAdmin
+    .from('profiles')
+    .update({ refinement_count: 0, refinement_month: currentMonth })
+    .eq('id', userId)
+    .select(
+      'id, email, is_pro, plan_tier, usage_count, subscription_status, current_period_end, refinement_count, refinement_month',
+    )
+    .single()
+
+  if (error || !data) {
+    console.error('[refinement] month reset failed', error?.message)
+    return { ...profile, refinement_count: 0, refinement_month: currentMonth }
+  }
+  return data
+}
+
+/**
+ * @param {Record<string, unknown>} profile
+ * @param {string | null} authEmail
+ */
+function refinementQuotaForResponse(profile, authEmail) {
+  if (isElitePlan(profile, authEmail) || isOwnerFreePro(authEmail)) {
+    return {
+      refinementUsedThisMonth: 0,
+      refinementLimit: PRO_MONTHLY_REFINEMENT_LIMIT,
+      refinementRemaining: null,
+      refinementUnlimited: true,
+    }
+  }
+  const used = effectiveRefinementCountThisMonth(profile)
+  return {
+    refinementUsedThisMonth: used,
+    refinementLimit: PRO_MONTHLY_REFINEMENT_LIMIT,
+    refinementRemaining: Math.max(0, PRO_MONTHLY_REFINEMENT_LIMIT - used),
+    refinementUnlimited: false,
+  }
+}
+
+/**
+ * Increment refinement usage after a successful OpenAI refine (Pro only; owner skips).
+ * @param {string} userId
+ */
+async function incrementMonthlyRefinementCount(userId) {
+  if (!supabaseAdmin) return null
+  const currentMonth = refinementMonthKeyUtc()
+  const { data: row, error: readErr } = await supabaseAdmin
+    .from('profiles')
+    .select('refinement_count, refinement_month')
+    .eq('id', userId)
+    .maybeSingle()
+  if (readErr) {
+    console.error('[refinement] read before increment', readErr.message)
+    return null
+  }
+  const eff = effectiveRefinementCountThisMonth(row)
+  const next = eff + 1
+  const { data, error } = await supabaseAdmin
+    .from('profiles')
+    .update({ refinement_count: next, refinement_month: currentMonth })
+    .eq('id', userId)
+    .select(
+      'id, email, is_pro, plan_tier, usage_count, subscription_status, current_period_end, refinement_count, refinement_month',
+    )
+    .single()
+  if (error) {
+    console.error('[refinement] increment failed', error.message)
+    return null
+  }
+  return data
 }
 
 function usageEnvelope(profile, authEmail) {
@@ -1033,17 +1133,35 @@ app.post('/create-checkout-session', async (req, res) => {
     return res.status(400).json({ error: 'userId is required in JSON body.' })
   }
 
-  const checkoutMetadata = { userId, ...(emailMeta ? { email: emailMeta } : {}) }
+  const rawPlan = typeof req.body?.planTier === 'string' ? req.body.planTier.trim().toLowerCase() : 'pro'
+  const checkoutPlan = rawPlan === 'elite' ? 'elite' : 'pro'
+  const checkoutMetadata = {
+    userId,
+    planTier: checkoutPlan,
+    ...(emailMeta ? { email: emailMeta } : {}),
+  }
   console.log('[create-checkout-session] checkout metadata (safe):', {
     userId,
     emailAttached: Boolean(emailMeta),
+    planTier: checkoutPlan,
   })
 
+  let priceId = stripePriceId
+  if (checkoutPlan === 'elite') {
+    if (!stripeElitePriceId) {
+      return res.status(503).json({
+        error:
+          'Elite checkout is not configured. Add STRIPE_ELITE_PRICE_ID to the server environment (Stripe Dashboard → Product → Elite price).',
+      })
+    }
+    priceId = stripeElitePriceId
+  }
+
   try {
-    console.log('[create-checkout-session] Stripe price id:', stripePriceId)
+    console.log('[create-checkout-session] Stripe price id:', priceId, 'plan:', checkoutPlan)
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
-      line_items: [{ price: stripePriceId, quantity: 1 }],
+      line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}`,
       metadata: checkoutMetadata,
@@ -1317,23 +1435,37 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
     if (!profileResult.profile || profileResult.error) {
       return res.status(500).json({ ok: false, error: profileResult.error || 'Could not load profile.' })
     }
-    const profile = profileResult.profile
+    let profile = await ensureRefinementMonthReset(authUserId, profileResult.profile)
+
+    if (!canUseRefinements(profile, authUserEmail)) {
+      return res.status(403).json({
+        ok: false,
+        code: 'REFINEMENT_REQUIRES_PRO',
+        error: 'Section refinements are available on Pro and Elite.',
+      })
+    }
+
+    if (isProPlan(profile, authUserEmail)) {
+      const used = effectiveRefinementCountThisMonth(profile)
+      if (used >= PRO_MONTHLY_REFINEMENT_LIMIT) {
+        return res.status(403).json({
+          ok: false,
+          code: 'REFINEMENT_MONTHLY_LIMIT_REACHED',
+          error: "You've reached your monthly refinement limit.",
+        })
+      }
+    }
+
     usageSnapshot = usageEnvelope(profile, authUserEmail)
-    const hasProAccess = usageSnapshot.isPro
-    const freeLimitReached = !hasProAccess && usageSnapshot.usageCount >= FREE_LIMIT
     debugLog('SERVER_API_AI_USAGE_CHECK', {
       userId: authUserId,
       isPro: usageSnapshot.isPro,
       usageCount: usageSnapshot.usageCount,
       freeLimit: FREE_LIMIT,
-      remaining: usageSnapshot.remaining,
-      freeLimitReached,
       action: 'refine_section',
+      refinementsUsed: effectiveRefinementCountThisMonth(profile),
+      refinementLimit: PRO_MONTHLY_REFINEMENT_LIMIT,
     })
-
-    if (freeLimitReached) {
-      return res.status(403).json({ ok: false, code: 'FREE_LIMIT_REACHED', error: 'Free limit reached' })
-    }
 
     if (!openai) {
       return res.status(503).json({
@@ -1354,11 +1486,14 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
       })
       const polishedName = formatPersonName(refinePayload.employeeName ?? '')
       const polished = polishGeneratedCoachingForm(raw.trim(), polishedName)
-      let usageOut = usageSnapshot
-      if (authUserId) {
-        const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
-        if (updated) usageOut = usageEnvelope(updated, authUserEmail)
+
+      if (isProPlan(profile, authUserEmail)) {
+        const updatedProfile = await incrementMonthlyRefinementCount(authUserId)
+        if (updatedProfile) profile = updatedProfile
       }
+
+      const usageOut = usageEnvelope(profile, authUserEmail)
+      const rq = refinementQuotaForResponse(profile, authUserEmail)
       debugLog('[api/ai] refine_section response', { source: 'openai', section: refinePayload.sectionName })
       return res.json({
         ok: true,
@@ -1370,6 +1505,11 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
         remaining: usageOut?.remaining ?? null,
         freeLimit: usageOut?.freeLimit ?? FREE_LIMIT,
         isPro: usageOut?.isPro ?? null,
+        refinementUsedThisMonth: rq.refinementUsedThisMonth,
+        refinementLimit: rq.refinementLimit,
+        refinementRemaining: rq.refinementRemaining,
+        refinementUnlimited: rq.refinementUnlimited,
+        refinementMonth: profile.refinement_month ?? refinementMonthKeyUtc(),
       })
     } catch (err) {
       const message = typeof err?.message === 'string' ? err.message : 'Refinement failed'

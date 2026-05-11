@@ -6,6 +6,20 @@ import { CoachingApiError, FreeLimitReachedError, SERVER_UNAVAILABLE_MESSAGE } f
 /** Seconds before access_token expiry when we proactively refresh (same as coaching generation). */
 const ACCESS_REFRESH_MARGIN_SEC = 120
 
+export class RefinementRequiresProError extends Error {
+  constructor(message = 'Section refinements require Pro.') {
+    super(message)
+    this.name = 'RefinementRequiresProError'
+  }
+}
+
+export class RefinementMonthlyLimitError extends Error {
+  constructor(message = "You've reached your monthly refinement limit.") {
+    super(message)
+    this.name = 'RefinementMonthlyLimitError'
+  }
+}
+
 export type RefineSectionResult = {
   refinedText: string
   source: 'openai'
@@ -14,6 +28,11 @@ export type RefineSectionResult = {
     remaining: number
     freeLimit: number
     isPro: boolean
+  }
+  /** Align local profile with server after a successful refine. */
+  refinementSnapshot?: {
+    refinement_count: number
+    refinement_month: string | null
   }
 }
 
@@ -29,6 +48,11 @@ type ApiJson = {
   remaining?: number
   freeLimit?: number
   isPro?: boolean
+  refinementUsedThisMonth?: number
+  refinementLimit?: number
+  refinementRemaining?: number | null
+  refinementUnlimited?: boolean
+  refinementMonth?: string
 }
 
 async function getAccessTokenForApi(): Promise<string | null> {
@@ -87,7 +111,20 @@ function mapSuccessToResult(data: ApiJson): RefineSectionResult | null {
     }
   }
 
-  return { refinedText: refined, source: 'openai', usage }
+  let refinementSnapshot: RefineSectionResult['refinementSnapshot']
+  if (data.refinementUnlimited === true) {
+    refinementSnapshot = undefined
+  } else if (typeof data.refinementUsedThisMonth === 'number' && Number.isFinite(data.refinementUsedThisMonth)) {
+    refinementSnapshot = {
+      refinement_count: Math.max(0, Math.floor(data.refinementUsedThisMonth)),
+      refinement_month:
+        typeof data.refinementMonth === 'string' && data.refinementMonth.trim()
+          ? data.refinementMonth.trim()
+          : null,
+    }
+  }
+
+  return { refinedText: refined, source: 'openai', usage, refinementSnapshot }
 }
 
 async function fetchRefineOnce(clean: RefineSectionApiPayload): Promise<RefineSectionResult | null> {
@@ -143,6 +180,14 @@ async function fetchRefineOnce(clean: RefineSectionApiPayload): Promise<RefineSe
     typeof data?.error === 'string' && data.error.trim() ? data.error.trim() : null
 
   if (!res.ok) {
+    if (res.status === 403 && data?.code === 'REFINEMENT_REQUIRES_PRO') {
+      throw new RefinementRequiresProError(serverMessage || 'Section refinements require Pro.')
+    }
+    if (res.status === 403 && data?.code === 'REFINEMENT_MONTHLY_LIMIT_REACHED') {
+      throw new RefinementMonthlyLimitError(
+        serverMessage || "You've reached your monthly refinement limit.",
+      )
+    }
     if (res.status === 403 && data?.code === 'FREE_LIMIT_REACHED') {
       throw new FreeLimitReachedError(serverMessage || 'Free limit reached')
     }
@@ -174,7 +219,13 @@ export async function requestRefineSection(payload: RefineSectionApiPayload): Pr
   try {
     result = await fetchRefineOnce(payload)
   } catch (err) {
-    if (err instanceof FreeLimitReachedError || err instanceof CoachingApiError) throw err
+    if (
+      err instanceof FreeLimitReachedError ||
+      err instanceof RefinementRequiresProError ||
+      err instanceof RefinementMonthlyLimitError ||
+      err instanceof CoachingApiError
+    )
+      throw err
     console.error('[refine API] unexpected error')
   }
   if (result) return result
@@ -182,7 +233,13 @@ export async function requestRefineSection(payload: RefineSectionApiPayload): Pr
   try {
     result = await fetchRefineOnce(payload)
   } catch (err) {
-    if (err instanceof FreeLimitReachedError || err instanceof CoachingApiError) throw err
+    if (
+      err instanceof FreeLimitReachedError ||
+      err instanceof RefinementRequiresProError ||
+      err instanceof RefinementMonthlyLimitError ||
+      err instanceof CoachingApiError
+    )
+      throw err
     console.error('[refine API] retry unexpected error')
   }
   if (result) return result

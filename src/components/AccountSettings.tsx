@@ -2,7 +2,14 @@ import { useMemo, useState } from 'react'
 import { useProfile } from '../context/ProfileContext'
 import { getCreateBillingPortalSessionUrl, getCreateCheckoutSessionUrl } from '../lib/apiBase'
 import { supabase } from '../lib/supabase'
-import { freeGenerationsRemainingLabel, hasPremiumAccess } from '../types/profile'
+import {
+  freeGenerationsRemainingLabel,
+  getPlanDisplayLabel,
+  getRefinementQuotaForProfile,
+  hasPremiumAccess,
+  isElitePlan,
+  isOwnerFreePro,
+} from '../types/profile'
 
 type AccountSettingsProps = {
   userId: string
@@ -23,12 +30,26 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
   const [tutorialReplayLoading, setTutorialReplayLoading] = useState(false)
   const [tutorialReplayError, setTutorialReplayError] = useState<string | null>(null)
 
-  const planLabel = profile && hasPremiumAccess(profile) ? 'Pro' : 'Free'
+  const planLabel = profile ? getPlanDisplayLabel(profile, email ?? profile.email) : 'Free'
+  const planPillClass =
+    profile && hasPremiumAccess(profile)
+      ? isElitePlan(profile, email ?? profile.email)
+        ? 'is-elite'
+        : 'is-pro'
+      : 'is-free'
+
   const usageLabel = useMemo(() => {
     if (!profile) return 'Loading usage...'
-    if (hasPremiumAccess(profile)) return 'Pro Plan Active'
+    if (hasPremiumAccess(profile)) return `${getPlanDisplayLabel(profile, email ?? profile.email)} plan active`
     return `${freeGenerationsRemainingLabel(profile)} (${profile.usage_count} used)`
-  }, [profile])
+  }, [profile, email])
+
+  const refinementLabel = useMemo(() => {
+    if (!profile) return null
+    const q = getRefinementQuotaForProfile(profile, email ?? profile.email)
+    if (!hasPremiumAccess(profile)) return 'Section refinements — Pro or Elite'
+    return q.label
+  }, [profile, email])
   const canManageSubscription = Boolean(
     hasPremiumAccess(profile) ||
       profile?.stripe_customer_id?.trim() ||
@@ -48,7 +69,7 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
   const cancelAtPeriodEndLikely =
     profile?.subscription_status === 'canceled' && Boolean(profile?.current_period_end)
 
-  async function handleUpgrade() {
+  async function handleUpgrade(planTier: 'pro' | 'elite' = 'pro') {
     const trimmedUserId = userId.trim()
     if (!trimmedUserId) {
       setCheckoutError('Could not start checkout: missing user id. Please sign in again.')
@@ -58,7 +79,7 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
     setCheckoutError(null)
     setCheckoutLoading(true)
     try {
-      const payload = { userId: trimmedUserId, email: (email ?? '').trim() }
+      const payload = { userId: trimmedUserId, email: (email ?? '').trim(), planTier }
       const res = await fetch(getCreateCheckoutSessionUrl(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -205,8 +226,11 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
           <h2 className="card-title">Subscription</h2>
           <div className="settings-row">
             <span className="settings-label">Current Plan</span>
-            <span className={'settings-pill ' + (profile?.is_pro ? 'is-pro' : 'is-free')}>{planLabel}</span>
+            <span className={'settings-pill ' + planPillClass}>{planLabel}</span>
           </div>
+          {profile && isOwnerFreePro(email ?? profile.email) && (
+            <p className="settings-founder-note">Founder access — full Elite capabilities.</p>
+          )}
           <div className="settings-row">
             <span className="settings-label">Status</span>
             <span className="settings-value">{subscriptionStatusLabel}</span>
@@ -215,6 +239,12 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
             <span className="settings-label">Usage</span>
             <span className="settings-value">{usageLabel}</span>
           </div>
+          {refinementLabel && (
+            <div className="settings-row settings-row-stacked">
+              <span className="settings-label">Refinements</span>
+              <span className="settings-value settings-value-subtle">{refinementLabel}</span>
+            </div>
+          )}
           {loading && <p className="settings-note">Loading account data...</p>}
           {error && <p className="settings-error">{error}</p>}
           {currentPeriodEndLabel && (
@@ -238,10 +268,25 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
             </>
           ) : (
             <>
-              <p className="settings-note">Upgrade for unlimited AI generations.</p>
-              <button type="button" className="btn-primary settings-btn" onClick={() => void handleUpgrade()} disabled={checkoutLoading}>
-                {checkoutLoading ? 'Opening checkout…' : 'Upgrade to Pro'}
-              </button>
+              <p className="settings-note">Pro includes unlimited forms and 25 refinements monthly. Elite adds unlimited refinements ($11.99/mo).</p>
+              <div className="settings-upgrade-row">
+                <button
+                  type="button"
+                  className="btn-primary settings-btn"
+                  onClick={() => void handleUpgrade('pro')}
+                  disabled={checkoutLoading}
+                >
+                  {checkoutLoading ? 'Opening checkout…' : 'Upgrade to Pro — $8.99'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary settings-btn"
+                  onClick={() => void handleUpgrade('elite')}
+                  disabled={checkoutLoading}
+                >
+                  {checkoutLoading ? 'Opening checkout…' : 'Upgrade to Elite — $11.99'}
+                </button>
+              </div>
               {checkoutError && <p className="settings-error">{checkoutError}</p>}
             </>
           )}

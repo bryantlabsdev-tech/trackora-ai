@@ -1102,6 +1102,211 @@
   opacity: 0.92;
 }
 
+.plan-pro-refinement {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 0.35rem;
+  letter-spacing: 0.02em;
+}
+
+.plan-pro-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.plan-founder-note {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.55);
+  white-space: nowrap;
+}
+
+.plan-pro-card--elite {
+  background:
+    linear-gradient(var(--bg-elevated), var(--bg-elevated)) padding-box,
+    linear-gradient(135deg, rgba(212, 175, 55, 0.45), rgba(99, 102, 241, 0.35), rgba(45, 212, 191, 0.25)) border-box;
+  box-shadow:
+    0 10px 36px rgba(212, 175, 55, 0.08),
+    0 8px 20px rgba(59, 130, 246, 0.1),
+    0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+.plan-pro-card--elite .plan-pro-title {
+  color: rgba(226, 232, 240, 0.95);
+}
+
+.plan-pricing-tiers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0 0 1.1rem;
+}
+
+@media (max-width: 720px) {
+  .plan-pricing-tiers {
+    grid-template-columns: 1fr;
+  }
+}
+
+.plan-tier-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.65rem 0.7rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: rgba(15, 19, 28, 0.45);
+}
+
+.plan-tier-card--pro {
+  border-color: rgba(129, 140, 248, 0.35);
+}
+
+.plan-tier-card--elite {
+  border-color: rgba(212, 175, 55, 0.28);
+  background: linear-gradient(165deg, rgba(212, 175, 55, 0.06), rgba(15, 19, 28, 0.55));
+}
+
+.plan-tier-name {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.plan-tier-price {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.plan-tier-list {
+  margin: 0;
+  padding: 0 0 0 1rem;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: rgba(148, 163, 184, 0.95);
+  flex: 1;
+}
+
+.plan-tier-card .upgrade-checkout-wrap {
+  margin-top: 0.25rem;
+}
+
+.plan-tier-card .btn-plan-upgrade {
+  width: 100%;
+  font-size: 0.72rem;
+  padding: 0.4rem 0.5rem;
+}
+
+.plan-limit-extra {
+  margin: 0 0 0.65rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: rgba(203, 213, 225, 0.82);
+}
+
+.plan-limit-checkout-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.plan-limit-checkout-row .upgrade-checkout-wrap {
+  flex: 1;
+  min-width: 8.5rem;
+}
+
+.plan-limit-checkout-row .btn-plan-upgrade {
+  width: 100%;
+}
+
+.btn-plan-upgrade--outline {
+  box-shadow: none;
+}
+
+.paywall-plan-pick {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+}
+
+@media (max-width: 520px) {
+  .paywall-plan-pick {
+    grid-template-columns: 1fr;
+  }
+}
+
+.paywall-plan-card {
+  padding: 1rem 1rem 0.85rem;
+  border-radius: var(--radius-xl);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 19, 28, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.paywall-plan-card--pro {
+  border-color: rgba(129, 140, 248, 0.35);
+}
+
+.paywall-plan-card--elite {
+  border-color: rgba(212, 175, 55, 0.32);
+  background: linear-gradient(165deg, rgba(212, 175, 55, 0.07), rgba(15, 19, 28, 0.58));
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+
+.paywall-plan-kicker {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(165, 180, 252, 0.95);
+}
+
+.paywall-plan-kicker--elite {
+  color: rgba(226, 232, 240, 0.92);
+}
+
+.paywall-plan-price {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.paywall-plan-per {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgba(148, 163, 184, 0.9);
+}
+
+.paywall-plan-list {
+  margin: 0 0 0.35rem;
+  padding: 0 0 0 1.05rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: rgba(203, 213, 225, 0.88);
+  flex: 1;
+}
+
+.paywall-plan-card .upgrade-checkout-wrap {
+  margin-top: auto;
+}
+
+.paywall-plan-card .btn-plan-upgrade {
+  width: 100%;
+}
+
 .plan-badge {
   font-size: 0.6875rem;
   font-weight: 700;
