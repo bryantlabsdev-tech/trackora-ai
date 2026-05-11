@@ -2639,3 +2639,97 @@ a.btn-plan-upgrade:hover {
     bottom: max(6.75rem, calc(env(safe-area-inset-bottom, 0px) + 5.75rem));
   }
 }
+
+/* What’s New (returning users, versioned localStorage) */
+.whats-new-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 410;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(1rem, env(safe-area-inset-top, 0px)) max(1rem, env(safe-area-inset-right, 0px))
+    max(1rem, env(safe-area-inset-bottom, 0px)) max(1rem, env(safe-area-inset-left, 0px));
+  background: rgba(7, 10, 15, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.whats-new-dialog.card {
+  width: min(26rem, 100%);
+  max-height: min(90vh, 32rem);
+  overflow: auto;
+  margin: 0;
+  padding: 1.35rem 1.4rem 1.25rem;
+  border-radius: var(--radius-3xl);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 0 0 1px rgba(148, 163, 184, 0.12),
+    0 22px 56px rgba(0, 0, 0, 0.45),
+    0 0 48px rgba(56, 189, 248, 0.08);
+  transform: translateZ(0);
+}
+
+.whats-new-dialog.card:hover {
+  transform: translateZ(0);
+}
+
+.whats-new-title {
+  margin: 0 0 0.55rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.whats-new-body {
+  margin: 0 0 0.85rem;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.whats-new-list {
+  margin: 0 0 1.1rem;
+  padding-left: 1.15rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: rgba(226, 232, 240, 0.92);
+}
+
+.whats-new-list li {
+  margin-bottom: 0.35rem;
+}
+
+.whats-new-list li:last-child {
+  margin-bottom: 0;
+}
+
+.whats-new-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.whats-new-btn-primary {
+  flex: 1 1 8rem;
+  min-height: 2.5rem;
+}
+
+.whats-new-btn-secondary {
+  flex: 1 1 8rem;
+  min-height: 2.5rem;
+}
+
+@media (max-width: 420px) {
+  .whats-new-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .whats-new-btn-primary,
+  .whats-new-btn-secondary {
+    flex: 1 1 auto;
+  }
+}

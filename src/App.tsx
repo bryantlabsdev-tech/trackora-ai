@@ -12,6 +12,7 @@ import PrivacyPolicyPage from './components/PrivacyPolicyPage'
 import TermsOfServicePage from './components/TermsOfServicePage'
 import ResetPasswordScreen from './components/ResetPasswordScreen'
 import FeedbackFab from './components/FeedbackFab'
+import WhatsNewUpdateModal from './components/WhatsNewUpdateModal'
 import { PostTutorialFeedbackNudgeProvider } from './context/PostTutorialFeedbackNudgeContext'
 import { ProfileProvider } from './context/ProfileContext'
 import './App.css'
@@ -150,18 +151,21 @@ export default function App() {
       </div>
       <PostTutorialFeedbackNudgeProvider>
         <ProfileProvider client={client} userId={session.user.id} email={session.user.email ?? null}>
-          {view === 'settings' ? (
-            <AccountSettings
-              userId={session.user.id}
-              email={session.user.email ?? null}
-              onGoToCoaching={() => setView('coaching')}
-              onSignOut={async () => {
-                await client.auth.signOut()
-              }}
-            />
-          ) : (
-            <CoachingApp />
-          )}
+          <>
+            {view === 'settings' ? (
+              <AccountSettings
+                userId={session.user.id}
+                email={session.user.email ?? null}
+                onGoToCoaching={() => setView('coaching')}
+                onSignOut={async () => {
+                  await client.auth.signOut()
+                }}
+              />
+            ) : (
+              <CoachingApp />
+            )}
+            <WhatsNewUpdateModal onOpenAccountSettings={() => setView('settings')} />
+          </>
         </ProfileProvider>
         <FeedbackFab client={client} userId={session.user.id} userEmail={session.user.email ?? null} />
       </PostTutorialFeedbackNudgeProvider>
