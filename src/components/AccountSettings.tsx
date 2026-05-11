@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useProfile } from '../context/ProfileContext'
+import { startEliteUpgrade } from '../api/startEliteUpgrade'
 import { getCreateBillingPortalSessionUrl, getCreateCheckoutSessionUrl } from '../lib/apiBase'
 import { supabase } from '../lib/supabase'
 import {
@@ -19,9 +20,10 @@ type AccountSettingsProps = {
 }
 
 export default function AccountSettings({ userId, email, onGoToCoaching, onSignOut }: AccountSettingsProps) {
-  const { profile, loading, error, replayTutorialFromSettings } = useProfile()
+  const { profile, loading, error, refresh, replayTutorialFromSettings } = useProfile()
   const [checkoutLoading, setCheckoutLoading] = useState(false)
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
+  const [eliteInfoMsg, setEliteInfoMsg] = useState<string | null>(null)
   const [portalLoading, setPortalLoading] = useState(false)
   const [portalError, setPortalError] = useState<string | null>(null)
   const [passwordLoading, setPasswordLoading] = useState(false)
@@ -77,6 +79,40 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
     }
 
     setCheckoutError(null)
+    setEliteInfoMsg(null)
+
+    if (planTier === 'elite') {
+      setCheckoutLoading(true)
+      try {
+        const r = await startEliteUpgrade()
+        if (!r.ok) {
+          setCheckoutError(r.error || 'Could not start Elite upgrade.')
+          return
+        }
+        if (r.mode === 'checkout' && r.url) {
+          window.location.href = r.url
+          return
+        }
+        if (r.mode === 'subscription_updated') {
+          await refresh()
+          setEliteInfoMsg(
+            'You\u2019re on Elite now. You were charged only today\u2019s prorated difference on your existing subscription.',
+          )
+          return
+        }
+        if (r.mode === 'already_elite') {
+          setEliteInfoMsg(r.message || 'You\u2019re already on Elite.')
+          return
+        }
+        setCheckoutError('Unexpected billing response.')
+      } catch {
+        setCheckoutError('Network error. Try again.')
+      } finally {
+        setCheckoutLoading(false)
+      }
+      return
+    }
+
     setCheckoutLoading(true)
     try {
       const payload = { userId: trimmedUserId, email: (email ?? '').trim(), planTier }
@@ -269,6 +305,11 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
           ) : (
             <>
               <p className="settings-note">Pro includes unlimited forms and 25 refinements monthly. Elite adds unlimited refinements ($11.99/mo).</p>
+              <p className="settings-elite-proration-hint">
+                {
+                  'Upgrade to Elite — you\u2019ll only pay the prorated difference today. On Pro, we update your existing subscription (no second subscription).'
+                }
+              </p>
               <div className="settings-upgrade-row">
                 <button
                   type="button"
@@ -287,6 +328,7 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
                   {checkoutLoading ? 'Opening checkout…' : 'Upgrade to Elite — $11.99'}
                 </button>
               </div>
+              {eliteInfoMsg && <p className="settings-note">{eliteInfoMsg}</p>}
               {checkoutError && <p className="settings-error">{checkoutError}</p>}
             </>
           )}
@@ -308,9 +350,9 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
             onClick={() => void handleViewTutorial()}
             disabled={tutorialReplayLoading}
           >
-            {tutorialReplayLoading ? 'Opening…' : 'View Tutorial'}
+            {tutorialReplayLoading ? 'Resetting…' : 'Restart tutorial'}
           </button>
-          <p className="settings-help-caption">Replay the quick walkthrough.</p>
+          <p className="settings-help-caption">Clears the one-time flag so the onboarding shows again on Coaching.</p>
           {tutorialReplayError && <p className="settings-error">{tutorialReplayError}</p>}
         </article>
       </section>

@@ -37,6 +37,7 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
   const [error, setError] = useState<string | null>(null)
 
   const usageShadowKey = `trackora_usage_shadow_${userId}`
+  const tutorialSeenCacheKey = `trackora_tutorial_seen_${userId}`
 
   const readUsageShadow = useCallback((): number | null => {
     try {
@@ -123,15 +124,29 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
 
   const completeTutorial = useCallback(async () => {
     const result = await markTutorialSeen(client)
+    if (result.ok) {
+      try {
+        window.localStorage.setItem(tutorialSeenCacheKey, '1')
+      } catch {
+        // ignore quota / private mode
+      }
+    }
     await refresh()
     return result.ok
-  }, [client, refresh])
+  }, [client, refresh, tutorialSeenCacheKey])
 
   const replayTutorialFromSettings = useCallback(async () => {
     const result = await resetTutorialForReplay(client)
+    if (result.ok) {
+      try {
+        window.localStorage.removeItem(tutorialSeenCacheKey)
+      } catch {
+        // ignore
+      }
+    }
     await refresh()
     return result.ok
-  }, [client, refresh])
+  }, [client, refresh, tutorialSeenCacheKey])
 
   const acknowledgePaywallSeen = useCallback(async () => {
     const result = await markPaywallSeen(client)

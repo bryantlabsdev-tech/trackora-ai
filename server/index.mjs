@@ -30,6 +30,7 @@ import {
 import { evaluateSubscriptionAccess, profileRowGrantsPremium } from '../shared/billingSubscription.mjs'
 import { effectivePremiumAccess, isOwnerFreePro } from '../shared/ownerFreePro.mjs'
 import { canUseRefinements, isElitePlan, isProPlan } from '../shared/planAccess.mjs'
+import { dedupePriceIds, findSubscriptionItemForEliteUpgrade } from '../shared/eliteUpgrade.mjs'
 import {
   PRO_MONTHLY_REFINEMENT_LIMIT_DEFAULT,
   effectiveRefinementCountThisMonth,
@@ -64,6 +65,26 @@ const stripePriceId =
   'price_1TJaIIHG6iuq9JCNXyc4I5Hb'
 /** Set in Stripe + `.env` to enable Elite checkout and subscription tier sync (`STRIPE_ELITE_PRICE_ID`). */
 const stripeElitePriceId = process.env.STRIPE_ELITE_PRICE_ID?.trim() || ''
+
+function configuredProPriceIds() {
+  return dedupePriceIds([process.env.STRIPE_PRICE_ID, process.env.STRIPE_PRO_PRICE_ID, stripePriceId])
+}
+
+/**
+ * @param {unknown} err
+ * @returns {string}
+ */
+function stripeEliteUpgradeErrorMessage(err) {
+  const e = err && typeof err === 'object' ? err : {}
+  const t = String(e.type || '')
+  if (t === 'StripeCardError' || e.code === 'card_declined') {
+    return typeof e.message === 'string' && e.message.trim()
+      ? e.message.trim()
+      : 'Your card was declined. You remain on your current plan until payment succeeds.'
+  }
+  if (typeof e.message === 'string' && e.message.trim()) return e.message.trim()
+  return 'Upgrade could not be completed. Please try again or use the billing portal.'
+}
 
 const supabaseUrl = process.env.SUPABASE_URL?.trim() || ''
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || ''
@@ -962,7 +983,7 @@ async function getProfileForUser(userId) {
   const { data, error } = await supabaseAdmin
     .from('profiles')
     .select(
-      'id, email, is_pro, plan_tier, usage_count, subscription_status, current_period_end, refinement_count, refinement_month',
+      'id, email, is_pro, plan_tier, usage_count, subscription_status, current_period_end, refinement_count, refinement_month, stripe_customer_id, stripe_subscription_id',
     )
     .eq('id', userId)
     .maybeSingle()
@@ -1146,16 +1167,14 @@ app.post('/create-checkout-session', async (req, res) => {
     planTier: checkoutPlan,
   })
 
-  let priceId = stripePriceId
   if (checkoutPlan === 'elite') {
-    if (!stripeElitePriceId) {
-      return res.status(503).json({
-        error:
-          'Elite checkout is not configured. Add STRIPE_ELITE_PRICE_ID to the server environment (Stripe Dashboard → Product → Elite price).',
-      })
-    }
-    priceId = stripeElitePriceId
+    return res.status(400).json({
+      error:
+        'Elite signup requires a signed-in request. Use POST /api/billing/start-elite with Authorization (prevents duplicate subscriptions for Pro users).',
+    })
   }
+
+  const priceId = stripePriceId
 
   try {
     console.log('[create-checkout-session] Stripe price id:', priceId, 'plan:', checkoutPlan)
@@ -1319,6 +1338,163 @@ async function handleCreateCustomerPortalSession(req, res) {
 /**
  * Authenticated: re-fetch subscription from Stripe and sync profiles (webhook backup).
  */
+/**
+ * Authenticated Elite: Free → Checkout (new subscription); Pro → same subscription, swap price + proration invoice.
+ * Prevents duplicate subscriptions when upgrading from Pro.
+ */
+async function handleStartElite(req, res) {
+  const appUrl = process.env.APP_URL?.trim()?.replace(/\/$/, '') || ''
+  if (!stripe || !supabaseAdmin) {
+    return res.status(503).json({ ok: false, error: 'Billing is not configured.' })
+  }
+  if (!stripeElitePriceId) {
+    return res.status(503).json({
+      ok: false,
+      error: 'Elite is not configured. Set STRIPE_ELITE_PRICE_ID on the server.',
+    })
+  }
+  if (!appUrl) {
+    return res.status(503).json({ ok: false, error: 'APP_URL is not configured.' })
+  }
+
+  const auth = await getAuthenticatedUserId(req)
+  if (auth.error || !auth.userId) {
+    return res.status(401).json({ ok: false, error: auth.error || 'Unauthorized.' })
+  }
+
+  const profileResult = await getProfileForUser(auth.userId)
+  if (!profileResult.profile || profileResult.error) {
+    return res.status(500).json({ ok: false, error: profileResult.error || 'Could not load profile.' })
+  }
+  const profile = profileResult.profile
+  const sessionEmail = auth.email ?? profile.email ?? null
+
+  if (isElitePlan(profile, sessionEmail) || isOwnerFreePro(sessionEmail)) {
+    return res.json({
+      ok: true,
+      mode: 'already_elite',
+      message: "You're already on Elite.",
+    })
+  }
+
+  if (!effectivePremiumAccess(profile, sessionEmail)) {
+    try {
+      const session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        line_items: [{ price: stripeElitePriceId, quantity: 1 }],
+        success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${appUrl}`,
+        metadata: {
+          userId: auth.userId,
+          planTier: 'elite',
+          ...(typeof profile.email === 'string' && profile.email.trim() ? { email: profile.email.trim() } : {}),
+        },
+        client_reference_id: auth.userId,
+        subscription_data: {
+          metadata: { userId: auth.userId, planTier: 'elite' },
+        },
+      })
+      if (!session.url) {
+        return res.status(500).json({ ok: false, error: 'Checkout session missing URL.' })
+      }
+      return res.json({ ok: true, mode: 'checkout', url: session.url })
+    } catch (e) {
+      const msg = typeof e?.message === 'string' ? e.message : 'Checkout failed'
+      console.error('[start-elite] checkout', msg)
+      return res.status(500).json({ ok: false, error: msg })
+    }
+  }
+
+  const subIdRaw = typeof profile.stripe_subscription_id === 'string' ? profile.stripe_subscription_id.trim() : ''
+  if (!subIdRaw) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        'No subscription is linked to this account. Subscribe to Pro first, or use the billing portal.',
+    })
+  }
+
+  let subscription
+  try {
+    subscription = await stripe.subscriptions.retrieve(subIdRaw)
+  } catch (e) {
+    console.error('[start-elite] retrieve subscription', e?.message)
+    return res.status(400).json({ ok: false, error: 'Could not load your Stripe subscription.' })
+  }
+
+  if (String(subscription.id) !== subIdRaw) {
+    return res.status(400).json({ ok: false, error: 'Subscription mismatch. Please contact support.' })
+  }
+
+  const customerId = pickStripeId(subscription.customer)
+  const metaUid = typeof subscription.metadata?.userId === 'string' ? subscription.metadata.userId.trim() : ''
+  const profCust = typeof profile.stripe_customer_id === 'string' ? profile.stripe_customer_id.trim() : ''
+  const custOk = !profCust || (Boolean(customerId) && profCust === customerId)
+  const metaOk = Boolean(metaUid) && metaUid === auth.userId
+  if (!custOk && !metaOk) {
+    return res.status(403).json({
+      ok: false,
+      error: 'This subscription is not linked to your account. Open the billing portal or contact support.',
+    })
+  }
+
+  if (inferBillingPlanTierFromSubscription(subscription, stripeElitePriceId) === 'elite') {
+    const cust = customerId || profCust
+    if (cust) {
+      await syncSubscriptionToUser({
+        eventType: 'elite.start.already_elite',
+        customerId: cust,
+        subscription,
+        metadataUserId: metaUid || auth.userId,
+      })
+    }
+    return res.json({ ok: true, mode: 'already_elite', message: "You're already on Elite." })
+  }
+
+  const proIds = configuredProPriceIds()
+  const pick = findSubscriptionItemForEliteUpgrade(subscription, proIds, stripeElitePriceId)
+  if (pick.alreadyElite) {
+    return res.json({ ok: true, mode: 'already_elite', message: "You're already on Elite." })
+  }
+  if (!pick.subscriptionItemId) {
+    return res.status(400).json({
+      ok: false,
+      error:
+        'Could not find a subscription line to upgrade. Use the Stripe billing portal or contact support.',
+    })
+  }
+
+  try {
+    const updated = await stripe.subscriptions.update(subIdRaw, {
+      items: [{ id: pick.subscriptionItemId, price: stripeElitePriceId }],
+      proration_behavior: 'always_invoice',
+    })
+    const cust = pickStripeId(updated.customer) || customerId || profCust
+    if (!cust) {
+      console.error('[start-elite] missing customer after update')
+      return res.status(500).json({ ok: false, error: 'Upgrade succeeded but billing sync failed (missing customer).' })
+    }
+    await syncSubscriptionToUser({
+      eventType: 'elite_upgrade.pro_to_elite',
+      customerId: cust,
+      subscription: updated,
+      metadataUserId: metaUid || auth.userId,
+    })
+    return res.json({ ok: true, mode: 'subscription_updated' })
+  } catch (e) {
+    const msg = stripeEliteUpgradeErrorMessage(e)
+    const isCard = e?.type === 'StripeCardError' || e?.code === 'card_declined'
+    const code = isCard ? 'PAYMENT_FAILED' : 'STRIPE_ERROR'
+    const status = isCard ? 402 : 400
+    console.error('[start-elite] subscription.update failed', {
+      type: e?.type,
+      code: e?.code,
+      message: e?.message,
+    })
+    return res.status(status).json({ ok: false, code, error: msg })
+  }
+}
+
 async function handleBillingReconcileSubscription(req, res) {
   if (!stripe) {
     return res.status(503).json({ ok: false, error: 'Stripe is not configured.' })
@@ -1386,6 +1562,7 @@ async function handleBillingAdminResyncAll(req, res) {
 
 app.post('/api/create-customer-portal-session', handleCreateCustomerPortalSession)
 app.post('/create-billing-portal-session', handleCreateCustomerPortalSession)
+app.post('/api/billing/start-elite', handleStartElite)
 app.post('/api/billing/reconcile-subscription', handleBillingReconcileSubscription)
 app.post('/api/billing/admin/resync-all', handleBillingAdminResyncAll)
 

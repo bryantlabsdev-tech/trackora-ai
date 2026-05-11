@@ -20,13 +20,13 @@ import {
   PRO_MONTHLY_REFINEMENT_LIMIT,
   canUseAiGeneration,
   freeGenerationsRemaining,
-  freeGenerationsRemainingLabel,
-  getPlanDisplayLabel,
   getRefinementQuotaForProfile,
   hasPremiumAccess,
   isElitePlan,
   isFreeLimitReached,
+  isFreePlan,
   isOwnerFreePro,
+  isProPlan,
 } from './types/profile'
 import {
   copyPlainTextToClipboard,
@@ -36,8 +36,12 @@ import {
 } from './lib/formatCoachingFormClipboard'
 import { mergeRefinedSectionIntoLog } from './lib/mergeRefinedSection'
 import { parseCoachingLogMarkdown } from './lib/parseCoachingLog'
+import { startEliteUpgrade } from './api/startEliteUpgrade'
 import { getCreateCheckoutSessionUrl } from './lib/apiBase'
 import './App.css'
+
+const ELITE_PRORATION_HINT =
+  'Upgrade to Elite — you\u2019ll only pay the prorated difference today.'
 
 type UpgradeToProButtonProps = {
   userId: string
@@ -46,6 +50,8 @@ type UpgradeToProButtonProps = {
   ctaLabel?: string
   checkoutPlan?: 'pro' | 'elite'
   variant?: 'primary' | 'outline'
+  /** After Pro → Elite proration upgrade succeeds (same subscription). */
+  onBillingUpdated?: () => void
 }
 
 function UpgradeToProButton({
@@ -54,9 +60,11 @@ function UpgradeToProButton({
   ctaLabel,
   checkoutPlan = 'pro',
   variant = 'primary',
+  onBillingUpdated,
 }: UpgradeToProButtonProps) {
   const [checkoutLoading, setCheckoutLoading] = useState(false)
   const [checkoutError, setCheckoutError] = useState<string | null>(null)
+  const [eliteInfo, setEliteInfo] = useState<string | null>(null)
 
   async function startCheckout() {
     const trimmedUserId = userId.trim()
@@ -70,8 +78,32 @@ function UpgradeToProButton({
     }
 
     setCheckoutError(null)
+    setEliteInfo(null)
     setCheckoutLoading(true)
     try {
+      if (checkoutPlan === 'elite') {
+        const result = await startEliteUpgrade()
+        if (!result.ok) {
+          setCheckoutError(result.error || 'Could not start Elite upgrade.')
+          return
+        }
+        if (result.mode === 'checkout' && result.url) {
+          window.location.href = result.url
+          return
+        }
+        if (result.mode === 'subscription_updated') {
+          onBillingUpdated?.()
+          setEliteInfo('You\u2019re on Elite now. Your subscription was updated in place.')
+          return
+        }
+        if (result.mode === 'already_elite') {
+          setEliteInfo(result.message || 'You\u2019re already on Elite.')
+          return
+        }
+        setCheckoutError('Unexpected response from billing.')
+        return
+      }
+
       const payload = {
         userId: trimmedUserId,
         email: email.trim(),
@@ -116,6 +148,16 @@ function UpgradeToProButton({
         {checkoutLoading && <span className="spinner" aria-hidden />}
         {checkoutLoading ? 'Opening checkout…' : (ctaLabel ?? 'Upgrade to Pro')}
       </button>
+      {checkoutPlan === 'elite' && (
+        <p className="plan-elite-proration-hint" role="note">
+          {ELITE_PRORATION_HINT}
+        </p>
+      )}
+      {eliteInfo && (
+        <p className="settings-note upgrade-checkout-info" role="status">
+          {eliteInfo}
+        </p>
+      )}
       {checkoutError && (
         <p className="auth-error upgrade-checkout-error" role="alert">
           {checkoutError}
@@ -144,6 +186,22 @@ const PAYWALL_ELITE_BULLETS = [
   'Unlimited AI refinements',
   'Future premium workflow features included',
   'Built for power users and leaders who refine often',
+] as const
+
+/** Pricing modal (full copy per product spec). */
+const PRICING_MODAL_FREE_BULLETS = ['3 coaching generations', 'No AI refinements'] as const
+
+const PRICING_MODAL_PRO_BULLETS = [
+  'Unlimited coaching forms',
+  '25 AI refinements monthly',
+  'Coaching + recognition drafts',
+] as const
+
+const PRICING_MODAL_ELITE_BULLETS = [
+  'Unlimited coaching forms',
+  'Unlimited AI refinements',
+  'Built for power users',
+  'Future workflow features',
 ] as const
 
 const REFINEMENT_LIMIT_HEADLINE = 'You\u2019ve reached your monthly refinement limit.'
@@ -479,6 +537,7 @@ export default function CoachingApp() {
   const [lastGenerationMs, setLastGenerationMs] = useState<number | null>(null)
   const [showLimitPaywall, setShowLimitPaywall] = useState(false)
   const [showRefinementLimitModal, setShowRefinementLimitModal] = useState(false)
+  const [showPricingModal, setShowPricingModal] = useState(false)
   /** Per-section copy feedback, keyed by `${sec.id}-${index}` */
   const [copiedSectionKeys, setCopiedSectionKeys] = useState<Record<string, boolean>>({})
   const [showWarmupNotice, setShowWarmupNotice] = useState(false)
@@ -497,6 +556,9 @@ export default function CoachingApp() {
   const [refineCustomText, setRefineCustomText] = useState('')
   const [refiningRowKey, setRefiningRowKey] = useState<string | null>(null)
   const [refinedFlashKeys, setRefinedFlashKeys] = useState<Record<string, boolean>>({})
+  const [tutorialDismissBusy, setTutorialDismissBusy] = useState(false)
+  const [tutorialDismissError, setTutorialDismissError] = useState<string | null>(null)
+  const tutorialDismissBusyRef = useRef(false)
 
   useEffect(() => {
     tutorialPhaseRef.current = tutorialPhase
@@ -504,6 +566,7 @@ export default function CoachingApp() {
 
   useEffect(() => {
     if (profileLoading || !profile) return
+    // Supabase `has_seen_tutorial` is the source of truth (see mark_tutorial_seen / reset_tutorial_for_replay).
     if (!profile.has_seen_tutorial) {
       setTutorialPhase((p) => {
         if (p === 'walkthrough' || p === 'spotlight_generate' || p === 'spotlight_output') return p
@@ -535,9 +598,34 @@ export default function CoachingApp() {
     if (refinementQuota.canRefine) setShowRefinementLimitModal(false)
   }, [refinementQuota.canRefine])
 
-  const dismissTutorialChrome = useCallback(() => {
-    setTutorialPhase('off')
-  }, [])
+  useEffect(() => {
+    if (!showPricingModal) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowPricingModal(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showPricingModal])
+
+  const dismissTutorialChrome = useCallback(async () => {
+    if (tutorialDismissBusyRef.current) return
+    tutorialDismissBusyRef.current = true
+    setTutorialDismissBusy(true)
+    setTutorialDismissError(null)
+    try {
+      const ok = await completeTutorial()
+      if (!ok) {
+        setTutorialDismissError(
+          'Could not save tutorial completion. Check your connection and try again — it may show again after refresh.',
+        )
+        return
+      }
+      setTutorialPhase('off')
+    } finally {
+      tutorialDismissBusyRef.current = false
+      setTutorialDismissBusy(false)
+    }
+  }, [completeTutorial])
 
   useEffect(() => {
     if (tutorialPhase !== 'spotlight_output' || !logText) return
@@ -548,7 +636,7 @@ export default function CoachingApp() {
 
   useEffect(() => {
     if (tutorialPhase !== 'spotlight_output') return
-    const id = window.setTimeout(() => dismissTutorialChrome(), 4200)
+    const id = window.setTimeout(() => void dismissTutorialChrome(), 4200)
     return () => clearTimeout(id)
   }, [tutorialPhase, dismissTutorialChrome])
 
@@ -893,72 +981,60 @@ export default function CoachingApp() {
               Loading your plan…
             </p>
           )}
-          {profile && !profileLoading && hasPremiumAccess(profile) && (
+          {profile && !profileLoading && (
             <div
               className={
-                'plan-pro-card' + (isElitePlan(profile, profile.email) ? ' plan-pro-card--elite' : '')
+                'plan-status-banner' +
+                (isElitePlan(profile, profile.email)
+                  ? ' plan-status-banner--elite'
+                  : hasPremiumAccess(profile)
+                    ? ' plan-status-banner--pro'
+                    : ' plan-status-banner--free')
               }
               aria-live="polite"
             >
-              <div className="plan-pro-card-head">
-                <span className="plan-pro-title">{getPlanDisplayLabel(profile, profile.email)} plan</span>
-                {isOwnerFreePro(profile.email) ? (
-                  <span className="plan-founder-note">Founder access</span>
-                ) : null}
-              </div>
-              <span className="plan-pro-subtext">Unlimited coaching forms</span>
-              <span className="plan-pro-refinement">{refinementQuota.label}</span>
+              {!hasPremiumAccess(profile) ? (
+                <>
+                  <div className="plan-status-banner-text">
+                    <span className="plan-status-banner-title">Free plan</span>
+                    <span className="plan-status-banner-sub">
+                      {FREE_AI_GENERATION_LIMIT} generations included
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-secondary plan-status-banner-cta"
+                    onClick={() => setShowPricingModal(true)}
+                  >
+                    View plans
+                  </button>
+                </>
+              ) : isElitePlan(profile, profile.email) ? (
+                <div className="plan-status-banner-text plan-status-banner-text--full">
+                  <span className="plan-status-banner-title">Elite plan active</span>
+                  <span className="plan-status-banner-sub">Unlimited refinements</span>
+                  {isOwnerFreePro(profile.email) ? (
+                    <span className="plan-status-banner-founder">Founder access</span>
+                  ) : null}
+                </div>
+              ) : (
+                <>
+                  <div className="plan-status-banner-text">
+                    <span className="plan-status-banner-title">Pro plan active</span>
+                    <span className="plan-status-banner-sub">
+                      {PRO_MONTHLY_REFINEMENT_LIMIT} refinements/month
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-primary plan-status-banner-cta"
+                    onClick={() => setShowPricingModal(true)}
+                  >
+                    Upgrade to Elite
+                  </button>
+                </>
+              )}
             </div>
-          )}
-          {profile && !profileLoading && !hasPremiumAccess(profile) && (
-            <>
-              <div className="plan-row" aria-live="polite">
-                <span className="plan-badge">Free</span>
-                <span className="plan-detail">{freeGenerationsRemainingLabel(profile)}</span>
-              </div>
-              <div className="plan-pricing-tiers" aria-label="Plans">
-                <div className="plan-tier-card">
-                  <span className="plan-tier-name">Free</span>
-                  <span className="plan-tier-price">$0</span>
-                  <ul className="plan-tier-list">
-                    <li>{FREE_AI_GENERATION_LIMIT} coaching generations</li>
-                    <li>No section refinements</li>
-                  </ul>
-                </div>
-                <div className="plan-tier-card plan-tier-card--pro">
-                  <span className="plan-tier-name">Pro</span>
-                  <span className="plan-tier-price">$8.99/mo</span>
-                  <ul className="plan-tier-list">
-                    {PAYWALL_PRO_BULLETS.map((line) => (
-                      <li key={line}>{line}</li>
-                    ))}
-                  </ul>
-                  <UpgradeToProButton
-                    userId={profile.id}
-                    email={profile.email}
-                    checkoutPlan="pro"
-                    variant="outline"
-                    ctaLabel="Choose Pro"
-                  />
-                </div>
-                <div className="plan-tier-card plan-tier-card--elite">
-                  <span className="plan-tier-name">Elite</span>
-                  <span className="plan-tier-price">$11.99/mo</span>
-                  <ul className="plan-tier-list">
-                    {PAYWALL_ELITE_BULLETS.map((line) => (
-                      <li key={line}>{line}</li>
-                    ))}
-                  </ul>
-                  <UpgradeToProButton
-                    userId={profile.id}
-                    email={profile.email}
-                    checkoutPlan="elite"
-                    variant="outline"
-                    ctaLabel="Choose Elite"
-                  />
-                </div>
-              </div>
-            </>
           )}
           <label className={'field' + (tutorialHighlightQuickTopics ? ' tutorial-field-highlight' : '')}>
             <span className="label-text">Quick coaching topics</span>
@@ -1080,13 +1156,20 @@ export default function CoachingApp() {
               <p className="plan-limit-extra">Need unlimited refinements? Elite includes unlimited AI refinements ($11.99/mo).</p>
               <p className="plan-limit-trust-mini">Cancel anytime from Settings.</p>
               <div className="plan-limit-checkout-row">
-                <UpgradeToProButton userId={profile.id} email={profile.email} checkoutPlan="pro" ctaLabel="Unlock Pro — $8.99" />
+                <UpgradeToProButton
+                  userId={profile.id}
+                  email={profile.email}
+                  checkoutPlan="pro"
+                  ctaLabel="Unlock Pro — $8.99"
+                  onBillingUpdated={() => void refresh()}
+                />
                 <UpgradeToProButton
                   userId={profile.id}
                   email={profile.email}
                   checkoutPlan="elite"
                   variant="outline"
                   ctaLabel="Unlock Elite — $11.99"
+                  onBillingUpdated={() => void refresh()}
                 />
               </div>
             </div>
@@ -1441,6 +1524,21 @@ export default function CoachingApp() {
                 </button>
               )}
             </div>
+            <div className="tutorial-skip-row">
+              <button
+                type="button"
+                className="btn-text tutorial-skip-btn"
+                disabled={tutorialDismissBusy}
+                onClick={() => void dismissTutorialChrome()}
+              >
+                {tutorialDismissBusy ? 'Saving…' : 'Skip tutorial'}
+              </button>
+            </div>
+            {tutorialDismissError && (
+              <p className="tutorial-dismiss-error" role="alert">
+                {tutorialDismissError}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -1448,8 +1546,18 @@ export default function CoachingApp() {
       {tutorialPhase === 'spotlight_output' && logText && (
         <div className="tutorial-output-hud">
           <p className="tutorial-output-label">Your form</p>
-          <button type="button" className="tutorial-done-btn" onClick={dismissTutorialChrome}>
-            Done
+          {tutorialDismissError && (
+            <p className="tutorial-dismiss-error tutorial-dismiss-error--hud" role="alert">
+              {tutorialDismissError}
+            </p>
+          )}
+          <button
+            type="button"
+            className="tutorial-done-btn"
+            disabled={tutorialDismissBusy}
+            onClick={() => void dismissTutorialChrome()}
+          >
+            {tutorialDismissBusy ? 'Saving…' : 'Done'}
           </button>
         </div>
       )}
@@ -1516,7 +1624,13 @@ export default function CoachingApp() {
                     <li key={line}>{line}</li>
                   ))}
                 </ul>
-                <UpgradeToProButton userId={profile.id} email={profile.email} checkoutPlan="pro" ctaLabel="Get Pro" />
+                <UpgradeToProButton
+                  userId={profile.id}
+                  email={profile.email}
+                  checkoutPlan="pro"
+                  ctaLabel="Get Pro"
+                  onBillingUpdated={() => void refresh()}
+                />
               </div>
               <div className="paywall-plan-card paywall-plan-card--elite">
                 <span className="paywall-plan-kicker paywall-plan-kicker--elite">Elite</span>
@@ -1526,7 +1640,13 @@ export default function CoachingApp() {
                     <li key={line}>{line}</li>
                   ))}
                 </ul>
-                <UpgradeToProButton userId={profile.id} email={profile.email} checkoutPlan="elite" ctaLabel="Get Elite" />
+                <UpgradeToProButton
+                  userId={profile.id}
+                  email={profile.email}
+                  checkoutPlan="elite"
+                  ctaLabel="Get Elite"
+                  onBillingUpdated={() => void refresh()}
+                />
               </div>
             </div>
             <p className="paywall-trust">Cancel anytime from Settings.</p>
@@ -1538,6 +1658,128 @@ export default function CoachingApp() {
               >
                 Maybe later
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPricingModal && profile && (
+        <div className="pricing-modal-root" role="presentation">
+          <button
+            type="button"
+            className="pricing-modal-backdrop"
+            aria-label="Close plans"
+            onClick={() => setShowPricingModal(false)}
+          />
+          <div
+            className="pricing-modal-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pricing-modal-title"
+          >
+            <div className="pricing-modal-header">
+              <div>
+                <h2 id="pricing-modal-title" className="pricing-modal-title">
+                  Plans
+                </h2>
+                <p className="pricing-modal-lede">Pick the tier that fits how often you refine. Cancel anytime from Settings.</p>
+              </div>
+              <button
+                type="button"
+                className="pricing-modal-close"
+                aria-label="Close"
+                onClick={() => setShowPricingModal(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="pricing-modal-grid">
+              <article className="pricing-tier-card">
+                <span className="pricing-tier-kicker">Free</span>
+                <p className="pricing-tier-price">$0</p>
+                <ul className="pricing-tier-list">
+                  {PRICING_MODAL_FREE_BULLETS.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+                <div className="pricing-tier-footer">
+                  {isFreePlan(profile, profile.email) ? (
+                    <button type="button" className="btn-secondary pricing-tier-cta pricing-tier-cta--current" disabled>
+                      Current plan
+                    </button>
+                  ) : (
+                    <button type="button" className="btn-secondary pricing-tier-cta pricing-tier-cta--current" disabled>
+                      Start free
+                    </button>
+                  )}
+                </div>
+              </article>
+
+              <article className="pricing-tier-card pricing-tier-card--popular">
+                <span className="pricing-tier-ribbon pricing-tier-ribbon--popular" aria-hidden>
+                  Most popular
+                </span>
+                <span className="pricing-tier-kicker">Pro</span>
+                <p className="pricing-tier-price">
+                  $8.99<span className="pricing-tier-price-suffix">/mo</span>
+                </p>
+                <ul className="pricing-tier-list">
+                  {PRICING_MODAL_PRO_BULLETS.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+                <div className="pricing-tier-footer">
+                  {isProPlan(profile, profile.email) ? (
+                    <button type="button" className="btn-primary pricing-tier-cta pricing-tier-cta--current" disabled>
+                      Current plan
+                    </button>
+                  ) : (
+                    <UpgradeToProButton
+                      userId={profile.id}
+                      email={profile.email}
+                      checkoutPlan="pro"
+                      ctaLabel="Choose Pro"
+                      onBillingUpdated={() => {
+                        setShowPricingModal(false)
+                        void refresh()
+                      }}
+                    />
+                  )}
+                </div>
+              </article>
+
+              <article className="pricing-tier-card pricing-tier-card--elite">
+                <span className="pricing-tier-ribbon pricing-tier-ribbon--elite" aria-hidden>
+                  Best value
+                </span>
+                <span className="pricing-tier-kicker pricing-tier-kicker--elite">Elite</span>
+                <p className="pricing-tier-price">
+                  $11.99<span className="pricing-tier-price-suffix">/mo</span>
+                </p>
+                <ul className="pricing-tier-list">
+                  {PRICING_MODAL_ELITE_BULLETS.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+                <div className="pricing-tier-footer">
+                  {isElitePlan(profile, profile.email) ? (
+                    <button type="button" className="btn-primary pricing-tier-cta pricing-tier-cta--elite pricing-tier-cta--current" disabled>
+                      Current plan
+                    </button>
+                  ) : (
+                    <UpgradeToProButton
+                      userId={profile.id}
+                      email={profile.email}
+                      checkoutPlan="elite"
+                      ctaLabel="Choose Elite"
+                      onBillingUpdated={() => {
+                        setShowPricingModal(false)
+                        void refresh()
+                      }}
+                    />
+                  )}
+                </div>
+              </article>
             </div>
           </div>
         </div>

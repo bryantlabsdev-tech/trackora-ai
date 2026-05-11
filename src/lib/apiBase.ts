@@ -44,3 +44,8 @@ export function getCreateBillingPortalSessionUrl(): string {
 export function getBillingReconcileUrl(): string {
   return `${getApiBase()}/api/billing/reconcile-subscription`
 }
+
+/** Authenticated Elite: Free → checkout URL; Pro → proration upgrade on existing subscription. */
+export function getStartEliteUrl(): string {
+  return `${getApiBase()}/api/billing/start-elite`
+}
