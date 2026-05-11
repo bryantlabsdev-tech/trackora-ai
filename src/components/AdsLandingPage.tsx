@@ -57,13 +57,12 @@ export default function AdsLandingPage() {
 
       <main>
         <section className="landing-hero" aria-labelledby="ads-hero-title">
-          <p className="landing-eyebrow">For team leads &amp; managers</p>
+          <p className="landing-eyebrow">FOR RETAIL, OPERATIONS, AND WORKPLACE LEADERS</p>
           <h1 id="ads-hero-title" className="landing-hero-title">
-            Create coaching forms in seconds
+            Create professional coaching and recognition drafts in seconds
           </h1>
           <p className="landing-hero-lead">
-            Built for team leads and managers who need clean, professional coaching forms without writing
-            everything from scratch.
+            TrackoraAI helps managers generate structured coaching and recognition documentation with AI-assisted wording, editable sections, and manager-ready follow-up guidance.
           </p>
           <div className="landing-trial-ctas" style={{ marginBottom: '1.75rem' }}>
             <a className="landing-btn landing-btn--primary landing-btn--lg" href="/signup">
@@ -94,7 +93,7 @@ export default function AdsLandingPage() {
                     rows={4}
                     defaultValue="Example: Missed follow-ups on customer commitments after promising callbacks."
                   />
-                  <p className="landing-hero-trust-line">After signup, generate full forms in one click.</p>
+                  <p className="landing-hero-trust-line">Structured sections continue below with editable AI refinements and manager follow-ups.</p>
                 </div>
                 <div className="landing-hero-demo-output">
                   <p className="landing-hero-demo-label">Sample output</p>
@@ -185,10 +184,10 @@ export default function AdsLandingPage() {
         <section className="landing-trial" aria-labelledby="ads-final-cta-title">
           <div className="landing-trial-inner">
             <h2 id="ads-final-cta-title" className="landing-trial-title">
-              Start creating coaching forms today
+              Start creating workplace-ready coaching drafts today
             </h2>
             <p className="landing-trial-copy">
-              Sign up free and turn your notes into clear, professional coaching forms.
+              Sign up free and turn your notes into structured coaching and recognition drafts your team can use right away.
             </p>
             <div className="landing-trial-ctas">
               <a className="landing-btn landing-btn--primary landing-btn--lg" href="/signup">

@@ -4,6 +4,8 @@ import { useMemo, useState } from 'react'
 
 /** Canonical hero line — this is what localhost:5173 must show for `/` (signed out). */
 export const LANDING_HERO_HEADLINE = 'Create professional coaching and recognition forms in seconds'
+const DEMO_STORAGE_KEY = 'trackoraai_demo_generation_count'
+const DEMO_GENERATION_LIMIT = 3
 
 type PreviewResult = {
   summary: string
@@ -52,6 +54,26 @@ export default function LandingPage() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [demoGenerationCount, setDemoGenerationCount] = useState(() => {
+    if (typeof window === 'undefined') return 0
+    try {
+      const raw = window.localStorage.getItem(DEMO_STORAGE_KEY)
+      const n = Number(raw ?? 0)
+      if (!Number.isFinite(n)) return 0
+      return Math.max(0, Math.min(DEMO_GENERATION_LIMIT, Math.floor(n)))
+    } catch {
+      return 0
+    }
+  })
+
+  const demosRemaining = Math.max(0, DEMO_GENERATION_LIMIT - demoGenerationCount)
+  const demoLimitReached = demosRemaining <= 0
+  const demoStatusCopy =
+    demoLimitReached
+      ? 'You’ve used your 3 free demo generations.'
+      : demoGenerationCount <= 0
+      ? 'No credit card required • 3 free demos included'
+      : `${demosRemaining} demo generation${demosRemaining === 1 ? '' : 's'} left • Create a free account anytime`
 
   const generatedCopy = useMemo(() => {
     if (!previewResult) return ''
@@ -64,12 +86,21 @@ export default function LandingPage() {
 
   async function handleGeneratePreview() {
     const trimmed = issueText.trim()
-    if (!trimmed || isGenerating) return
+    if (!trimmed || isGenerating || demoLimitReached) return
     setCopyState('idle')
     setIsGenerating(true)
     setPreviewResult(null)
     await new Promise(resolve => setTimeout(resolve, 1300))
     setPreviewResult(getMockPreview(trimmed))
+    setDemoGenerationCount(prev => {
+      const next = Math.min(DEMO_GENERATION_LIMIT, prev + 1)
+      try {
+        window.localStorage.setItem(DEMO_STORAGE_KEY, String(next))
+      } catch {
+        // ignore storage write failures
+      }
+      return next
+    })
     setIsGenerating(false)
   }
 
@@ -104,13 +135,12 @@ export default function LandingPage() {
 
       <main>
         <section className="landing-hero">
-          <p className="landing-eyebrow">For retail leaders and fast-moving teams</p>
+          <p className="landing-eyebrow">FOR MANAGERS, TEAM LEADS, AND FAST-MOVING WORKPLACES</p>
           <h1 className="landing-hero-title">{LANDING_HERO_HEADLINE}</h1>
           <p className="landing-hero-lead">
-            Describe the moment. TrackoraAI returns clear, manager-ready documentation you can use the same
-            shift — no blank page, no second-guessing the wording.
+            TrackoraAI helps managers generate professional coaching and recognition forms with structured AI-powered wording, editable sections, and workplace-ready documentation in seconds.
           </p>
-          <p className="landing-hero-trust-ribbon">Built for retail leaders and fast-moving teams.</p>
+          <p className="landing-hero-trust-ribbon">Built for workplace coaching and recognition documentation that teams can actually use.</p>
 
           <div className="landing-hero-demo" aria-label="Demo: user types input and AI generates a coaching form">
             <div className="landing-hero-demo-window">
@@ -147,14 +177,37 @@ export default function LandingPage() {
                   <button
                     type="button"
                     className="landing-btn landing-btn--primary landing-btn--lg landing-generate-btn"
-                    disabled={!issueText.trim() || isGenerating}
+                    disabled={!issueText.trim() || isGenerating || demoLimitReached}
                     onClick={handleGeneratePreview}
                   >
-                    {isGenerating ? 'Generating...' : 'Generate Coaching Form'}
+                    {isGenerating
+                      ? 'Generating...'
+                      : demoLimitReached
+                        ? 'Demo limit reached'
+                        : 'Generate Coaching Form'}
                   </button>
-                  <p className="landing-hero-trust-line">No credit card required • Takes less than 10 seconds</p>
+                  <p className="landing-hero-trust-line">{demoStatusCopy}</p>
+                  {demoLimitReached && (
+                    <div className="landing-demo-limit-cta" role="status" aria-live="polite">
+                      <p className="landing-demo-limit-title">You&rsquo;ve used your 3 free demo generations.</p>
+                      <p className="landing-demo-limit-copy">
+                        Create a free account to keep generating professional coaching forms.
+                      </p>
+                      <div className="landing-demo-limit-actions">
+                        <a className="landing-btn landing-btn--primary landing-btn--lg" href="/signup">
+                          Create Free Account
+                        </a>
+                        <a className="landing-btn landing-btn--ghost landing-btn--lg" href="/login">
+                          Log In
+                        </a>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="landing-hero-demo-output" aria-live="polite">
+                <div
+                  className={'landing-hero-demo-output' + (demoLimitReached ? ' is-demo-locked' : '')}
+                  aria-live="polite"
+                >
                   <div className="landing-preview-header">
                     <p className="landing-hero-demo-label">Professional preview</p>
                     <button
@@ -193,7 +246,7 @@ export default function LandingPage() {
                     </p>
                   )}
                   <p className="landing-preview-footnote">
-                    This is a preview. Full editing and saving available after signup.
+                    Structured coaching sections continue below with editable AI refinements, manager follow-ups, and workplace-ready documentation tools.
                   </p>
                 </div>
               </div>
@@ -276,7 +329,7 @@ export default function LandingPage() {
             </p>
             <div className="landing-trial-ctas">
               <a className="landing-btn landing-btn--primary landing-btn--lg" href="/signup">
-                Turn This Into a Coaching Form
+                Generate Professional Coaching Form
               </a>
               <a className="landing-btn landing-btn--ghost landing-btn--lg" href="/signup">
                 Create Free Account
