@@ -1,5 +1,6 @@
 import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { initSentry } from './lib/sentry'
 import App from './App'
 import AppSplashScreen from './components/AppSplashScreen'
 import CheckoutSuccess from './CheckoutSuccess'
@@ -62,6 +63,8 @@ function Root() {
     </>
   )
 }
+
+initSentry()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

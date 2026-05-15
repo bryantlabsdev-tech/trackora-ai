@@ -60,10 +60,17 @@ import {
   buildRefineSectionPrompt,
   buildCoachingLogMessages,
 } from './ai/messages.mjs'
+import { parseApiAiRequest, parseCreateCheckoutSession } from './validation/schemas.mjs'
+import { handleStripeWebhookEvent } from './billing/stripeWebhookHandler.mjs'
+import { setupSentryExpress, captureServerException } from './sentry.mjs'
+import { logProductEvent, trackCoachingGenerated } from './lib/productEvents.mjs'
+import { securityHeaders } from './middleware/securityHeaders.mjs'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const app = express()
 app.set('trust proxy', 1)
+app.use(securityHeaders)
 
 /**
  * Vite output is `dist/` (`npm run build`). On Render, cwd is usually the service root, but we also
@@ -134,151 +141,23 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
     return res.status(400).send(`Webhook Error: ${msg}`)
   }
 
-  console.log('[webhook/stripe] event type:', event.type, 'id:', event.id)
-
-  try {
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object
-      const customerId = pickStripeId(session.customer)
-      const subscriptionId = pickStripeId(session.subscription)
-      const metadataUserId =
-        session.metadata && typeof session.metadata.userId === 'string'
-          ? session.metadata.userId
-          : null
-
-      console.log('[webhook/stripe] checkout.session.completed', {
-        sessionId: session.id,
-        mode: session.mode ?? null,
-        metadataUserId: metadataUserId ?? '(missing)',
-        subscriptionId: subscriptionId ?? '(missing)',
-      })
-
-      if (session.mode && session.mode !== 'subscription') {
-        console.warn('[webhook/stripe] checkout session mode is not subscription:', session.mode)
-      }
-
-      if (!customerId || !subscriptionId) {
-        console.error(
-          '[webhook/stripe] checkout.session.completed missing customer or subscription id; skipping sync',
-        )
-        return res.status(200).json({ received: true, skipped: 'missing_customer_or_subscription' })
-      }
-
-      const subscription = await stripe.subscriptions.retrieve(subscriptionId)
-      const result = await syncSubscriptionToUser({
-        eventType: event.type,
-        customerId,
-        subscription,
-        metadataUserId,
-      })
-      return respondStripeWebhookSync(res, event.type, result)
-    }
-
-    if (
-      event.type === 'customer.subscription.created' ||
-      event.type === 'customer.subscription.updated' ||
-      event.type === 'customer.subscription.deleted'
-    ) {
-      const subscription = event.data.object
-      const customerId = pickStripeId(subscription.customer)
-      const metadataUserId =
-        subscription.metadata && typeof subscription.metadata.userId === 'string'
-          ? subscription.metadata.userId
-          : null
-      if (!customerId) {
-        console.error('[webhook/stripe] subscription event missing customer id', event.type)
-        return res.status(200).json({ received: true, skipped: 'missing_customer_id' })
-      }
-
-      if (event.type === 'customer.subscription.deleted') {
-        console.log('[webhook/stripe] subscription deleted / ended', {
-          subscriptionId: subscription.id,
-          status: subscription.status ?? null,
-        })
-      }
-
-      if (subscription.status === 'past_due') {
-        console.warn('[webhook/stripe] subscription past_due — syncing is_pro=false (no grace)', {
-          subscriptionId: subscription.id,
-        })
-      }
-
-      const result = await syncSubscriptionToUser({
-        eventType: event.type,
-        customerId,
-        subscription,
-        metadataUserId,
-      })
-      return respondStripeWebhookSync(res, event.type, result)
-    }
-
-    if (
-      event.type === 'invoice.paid' ||
-      event.type === 'invoice.payment_succeeded' ||
-      event.type === 'invoice.payment_failed'
-    ) {
-      const invoice = event.data.object
-      const customerId = pickStripeId(invoice.customer)
-      const subscriptionId = pickStripeId(invoice.subscription)
-      const billingReason = typeof invoice.billing_reason === 'string' ? invoice.billing_reason : null
-
-      const isPaidEvent = event.type === 'invoice.paid' || event.type === 'invoice.payment_succeeded'
-
-      if (isPaidEvent && billingReason === 'subscription_cycle') {
-        console.log('[webhook/stripe] RENEWAL invoice paid (subscription_cycle)', {
-          eventType: event.type,
-          invoiceId: invoice.id,
-          subscriptionId,
-          amountPaid: invoice.amount_paid ?? null,
-          periodEnd: invoice.lines?.data?.[0]?.period?.end ?? null,
-        })
-      } else if (isPaidEvent) {
-        console.log('[webhook/stripe] invoice paid', {
-          eventType: event.type,
-          invoiceId: invoice.id,
-          billingReason,
-          subscriptionId,
-        })
-      } else {
-        console.warn('[webhook/stripe] invoice.payment_failed — renewal or charge failed; subscription will sync (past_due => is_pro false)', {
-          invoiceId: invoice.id,
-          subscriptionId,
-          billingReason,
-          attemptCount: invoice.attempt_count ?? null,
-          nextPaymentAttempt: invoice.next_payment_attempt ?? null,
-        })
-      }
-
-      if (!customerId || !subscriptionId) {
-        console.error('[webhook/stripe] invoice event missing customer or subscription id')
-        return res.status(200).json({ received: true, skipped: 'missing_customer_or_subscription' })
-      }
-
-      const subscription = await stripe.subscriptions.retrieve(subscriptionId)
-      const result = await syncSubscriptionToUser({
-        eventType: event.type,
-        customerId,
-        subscription,
-        metadataUserId:
-          subscription.metadata && typeof subscription.metadata.userId === 'string'
-            ? subscription.metadata.userId
-            : null,
-      })
-      return respondStripeWebhookSync(res, event.type, result)
-    }
-  } catch (err) {
-    const message = typeof err?.message === 'string' ? err.message : 'webhook handling failed'
-    console.error('[webhook/stripe] Handler EXCEPTION — returning 500 for Stripe retry:', message, err)
-    return res.status(500).json({ received: false, handlerError: message })
-  }
-
-  console.log('[webhook/stripe] unhandled event type (noop):', event.type)
-  return res.status(200).json({ received: true, unhandled: event.type })
+  return handleStripeWebhookEvent(event, res, { stripe, respondStripeWebhookSync })
 })
 
 app.use(cors({ origin: true }))
 /** Coaching + section refine send full form context — allow modest payloads. */
 app.use(express.json({ limit: '512kb' }))
+
+app.get('/api/health', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'trackora-api',
+    timestamp: new Date().toISOString(),
+    openai: Boolean(openai),
+    stripe: Boolean(stripe),
+    supabase: Boolean(supabaseAdmin),
+  })
+})
 
 const apiAiRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -473,6 +352,11 @@ async function recordServerSideGenerationUsage(userId, authEmail) {
 }
 
 app.post('/create-checkout-session', async (req, res) => {
+  const checkoutParsed = parseCreateCheckoutSession(req.body)
+  if (!checkoutParsed.ok) {
+    return res.status(400).json({ error: checkoutParsed.error })
+  }
+
   const stripeKeyEnv = process.env.STRIPE_SECRET_KEY?.trim() || ''
   console.log('[create-checkout-session] STRIPE_SECRET_KEY present:', Boolean(stripeKeyEnv))
   if (stripeKeyEnv.startsWith('sk_test_')) {
@@ -491,14 +375,9 @@ app.post('/create-checkout-session', async (req, res) => {
     return res.status(503).json({ error: 'APP_URL is not configured.' })
   }
 
-  const userId = typeof req.body?.userId === 'string' ? req.body.userId.trim() : ''
-  const emailMeta = typeof req.body?.email === 'string' ? req.body.email.trim() : ''
-  if (!userId) {
-    return res.status(400).json({ error: 'userId is required in JSON body.' })
-  }
-
-  const rawPlan = typeof req.body?.planTier === 'string' ? req.body.planTier.trim().toLowerCase() : 'pro'
-  const checkoutPlan = rawPlan === 'elite' ? 'elite' : 'pro'
+  const userId = checkoutParsed.data.userId
+  const emailMeta = checkoutParsed.data.email?.trim() ?? ''
+  const checkoutPlan = checkoutParsed.data.planTier === 'elite' ? 'elite' : 'pro'
   const checkoutMetadata = {
     userId,
     planTier: checkoutPlan,
@@ -535,6 +414,7 @@ app.post('/create-checkout-session', async (req, res) => {
     if (!session.url) {
       return res.status(500).json({ error: 'Checkout session missing URL.' })
     }
+    void logProductEvent(userId, 'checkout_session_started', { planTier: checkoutPlan })
     return res.json({ url: session.url })
   } catch (e) {
     const message = typeof e?.message === 'string' ? e.message : 'Checkout session failed'
@@ -740,6 +620,7 @@ async function handleStartElite(req, res) {
       if (!session.url) {
         return res.status(500).json({ ok: false, error: 'Checkout session missing URL.' })
       }
+      void logProductEvent(auth.userId, 'elite_upgrade_started', { mode: 'checkout' })
       return res.json({ ok: true, mode: 'checkout', url: session.url })
     } catch (e) {
       const msg = typeof e?.message === 'string' ? e.message : 'Checkout failed'
@@ -823,6 +704,7 @@ async function handleStartElite(req, res) {
       subscription: updated,
       metadataUserId: metaUid || auth.userId,
     })
+    void logProductEvent(auth.userId, 'elite_upgrade_started', { mode: 'subscription_updated' })
     return res.json({ ok: true, mode: 'subscription_updated' })
   } catch (e) {
     const msg = stripeEliteUpgradeErrorMessage(e)
@@ -915,16 +797,17 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
   if (!authHeader || typeof authHeader !== 'string') {
     return res.status(401).json({ ok: false, error: 'Unauthorized' })
   }
-  let payload = req.body?.payload
+
+  const bodyParsed = parseApiAiRequest(req.body)
+  if (!bodyParsed.ok) {
+    return res.status(400).json({ ok: false, error: bodyParsed.error })
+  }
+
+  let payload = bodyParsed.data.payload
   let isTutorialRun = false
   let authUserId = null
   let authUserEmail = null
   let usageSnapshot = null
-
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    console.error('[api/ai] bad request: expected object payload')
-    return res.status(400).json({ ok: false, error: 'Expected { action, payload } with a JSON object payload.' })
-  }
 
   debugLog('SERVER_API_AI_AUTH_HEADER_EXISTS', Boolean(req.headers.authorization))
   const auth = await getAuthenticatedUserId(req)
@@ -935,7 +818,7 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
   authUserEmail = auth.email
   debugLog('SERVER_API_AI_USER', { userId: authUserId, email: authUserEmail })
 
-  const action = normalizeAiRouteAction(req.body?.action)
+  const action = normalizeAiRouteAction(bodyParsed.data.action)
   if (!action) {
     return res.status(400).json({ ok: false, error: 'Missing or invalid action.' })
   }
@@ -1015,6 +898,10 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
       const usageOut = usageEnvelope(profile, authUserEmail)
       const rq = refinementQuotaForResponse(profile, authUserEmail)
       debugLog('[api/ai] refine_section response', { source: 'openai', section: refinePayload.sectionName })
+      void logProductEvent(authUserId, 'section_refined', {
+        section: refinePayload.sectionName,
+        workspace: refinePayload.coachingWorkspace,
+      })
       return res.json({
         ok: true,
         refinedText: polished,
@@ -1099,6 +986,15 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
         const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
         if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
+      trackCoachingGenerated(
+        authUserId,
+        {
+          source: 'deterministic',
+          mode: payloadForAi?.mode,
+          workspace: payloadForAi?.coachingWorkspace,
+        },
+        isTutorialRun,
+      )
       return res.json({
         ok: true,
         text,
@@ -1147,6 +1043,15 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
         const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
         if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
+      trackCoachingGenerated(
+        authUserId,
+        {
+          source: 'openai',
+          mode: payloadForAi?.mode,
+          workspace: payloadForAi?.coachingWorkspace,
+        },
+        isTutorialRun,
+      )
       return res.json({
         ok: true,
         text,
@@ -1171,6 +1076,15 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
         const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
         if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
+      trackCoachingGenerated(
+        authUserId,
+        {
+          source: 'openai',
+          mode: payloadForAi?.mode,
+          workspace: payloadForAi?.coachingWorkspace,
+        },
+        isTutorialRun,
+      )
     }
     return res.json({
       ok: true,
@@ -1202,6 +1116,16 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
         const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
         if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
+      trackCoachingGenerated(
+        authUserId,
+        {
+          source: 'deterministic',
+          mode: payloadForAi?.mode,
+          workspace: payloadForAi?.coachingWorkspace,
+          fallbackReason: 'openai_error',
+        },
+        isTutorialRun,
+      )
       return res.json({
         ok: true,
         text,
@@ -1254,13 +1178,22 @@ if (hasFrontendBuild) {
   })
 }
 
-const PORT = process.env.PORT || 3001
-const HOST = '0.0.0.0'
+export { app }
 
-app.listen(PORT, HOST, () => {
-  console.log(`Server running on http://${HOST}:${PORT}`)
-  if (hasFrontendBuild) {
-    console.log('[static] Serving SPA and static files from', path.resolve(distDir))
-  }
-})
+const isMain =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+
+if (isMain) {
+  const PORT = process.env.PORT || 3001
+  const HOST = '0.0.0.0'
+
+  await setupSentryExpress(app)
+
+  app.listen(PORT, HOST, () => {
+    console.log(`Server running on http://${HOST}:${PORT}`)
+    if (hasFrontendBuild) {
+      console.log('[static] Serving SPA and static files from', path.resolve(distDir))
+    }
+  })
+}
  

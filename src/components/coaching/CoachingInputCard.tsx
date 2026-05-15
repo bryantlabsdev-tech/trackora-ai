@@ -183,25 +183,27 @@ export function CoachingInputCard(props: CoachingInputCardProps) {
         <span className="label-text">
           Employee name <span className="req">*</span>
         </span>
-        <input
-          className={'field-control' + (invalidName ? ' is-invalid' : '')}
-          value={input.employeeName}
-          onChange={(e) => setInput((s) => ({ ...s, employeeName: e.target.value }))}
-          placeholder="e.g. Leeann"
-          autoComplete="name"
-        />
+            <input
+              className={'field-control' + (invalidName ? ' is-invalid' : '')}
+              value={input.employeeName}
+              onChange={(e) => setInput((s) => ({ ...s, employeeName: e.target.value }))}
+              placeholder="e.g. Leeann"
+              autoComplete="name"
+              data-testid="coaching-employee-name"
+            />
       </label>
       <label className="field">
         <span className="label-text">
           Coaching form is for <span className="req">*</span>
         </span>
-        <textarea
-          className={'field-control textarea' + (invalidReason ? ' is-invalid' : '')}
-          value={input.coachingReason}
-          onChange={(e) => setInput((s) => ({ ...s, coachingReason: e.target.value }))}
-          placeholder={workspaceUI.reasonPlaceholder}
-          rows={3}
-        />
+            <textarea
+              className={'field-control textarea' + (invalidReason ? ' is-invalid' : '')}
+              value={input.coachingReason}
+              onChange={(e) => setInput((s) => ({ ...s, coachingReason: e.target.value }))}
+              placeholder={workspaceUI.reasonPlaceholder}
+              rows={3}
+              data-testid="coaching-reason"
+            />
       </label>
       <label className="field field--notes-tight">
         <span className="label-text">Optional notes</span>
@@ -223,16 +225,17 @@ export function CoachingInputCard(props: CoachingInputCardProps) {
             Tap Generate
           </p>
         )}
-        <button
-          ref={generateBtnRef}
-          type="button"
-          className={
-            'btn-primary btn-generate-premium' +
-            (profile && isFreeLimitReached(profile) && tutorialPhase === 'off' ? ' is-limit-reached' : '') +
-            (tutorialHighlightGenerate ? ' is-tutorial-focus' : '')
-          }
-          disabled={loading || generationBlocked}
-          onClick={() => void onGenerate()}
+            <button
+              ref={generateBtnRef}
+              type="button"
+              data-testid="coaching-generate"
+              className={
+                'btn-primary btn-generate-premium' +
+                (profile && isFreeLimitReached(profile) && tutorialPhase === 'off' ? ' is-limit-reached' : '') +
+                (tutorialHighlightGenerate ? ' is-tutorial-focus' : '')
+              }
+              disabled={loading || generationBlocked}
+              onClick={() => void onGenerate()}
           aria-describedby={tutorialPhase === 'spotlight_generate' ? 'tutorial-generate-hint' : undefined}
         >
           {loading && <span className="spinner" aria-hidden />}

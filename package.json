@@ -7,7 +7,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server/index.mjs",
-    "test": "node --test shared/*.test.mjs shared/__tests__/*.test.mjs server/**/*.test.mjs",
+    "test": "node --test shared/*.test.mjs shared/__tests__/*.test.mjs server/**/*.test.mjs server/**/*.integration.test.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test e2e/api-health.spec.ts e2e/landing-static.spec.ts",
+    "test:all": "npm test && npm run test:e2e",
+    "metrics:summary": "node scripts/metrics-summary.mjs",
     "feedback:list": "node scripts/list-feedback.mjs",
     "billing:resync": "node scripts/resync-stripe-billing.mjs",
     "cap:sync": "npm run build && env LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 npx cap sync",
@@ -28,9 +32,14 @@
     "openai": "^6.33.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "stripe": "^22.0.0"
+    "stripe": "^22.0.0",
+    "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.51.0",
+    "@sentry/node": "^9.5.0",
+    "@sentry/react": "^9.5.0",
+    "supertest": "^7.1.0",
     "@capacitor/cli": "^7.4.2",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",

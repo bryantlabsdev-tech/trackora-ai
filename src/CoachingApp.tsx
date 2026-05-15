@@ -96,9 +96,14 @@ export default function CoachingApp() {
       </div>
 
       <p className="fine-print">
-        Your notes are sent securely to generate your form — ready to copy, save, or share with your team.{' '}
+        Your notes are sent securely to generate your form — ready to copy, save, or share with your team. Review AI
+        output before use.{' '}
         <a href="/privacy" className="fine-print-link">
           Privacy Policy
+        </a>
+        {' · '}
+        <a href="/terms" className="fine-print-link">
+          Terms
         </a>
         .
       </p>

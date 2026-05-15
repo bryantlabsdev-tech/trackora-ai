@@ -35,7 +35,9 @@ Apply database migrations in order under `supabase/migrations/` (Supabase SQL ed
 | `npm run dev` | Frontend + API concurrently |
 | `npm run build` | Production Vite build → `dist/` |
 | `npm start` | API only (serves `dist/` when built) |
-| `npm test` | Unit tests in `shared/` |
+| `npm test` | Unit + integration tests (`shared/`, `server/`) |
+| `npm run test:e2e` | Playwright (API, landing, optional auth with env) |
+| `npm run metrics:summary` | Funnel event counts (requires Supabase service role) |
 | `npm run cap:sync` | Build web assets and sync to native projects |
 | `npm run cap:android` / `cap:ios` | Sync + open Android Studio / Xcode |
 
@@ -71,11 +73,29 @@ Copy `.env.example` to `.env`. Server-only keys have no `VITE_` prefix. Frontend
 ## Tests & CI
 
 ```bash
-npm test
+npm test              # unit + integration (shared/, server/)
+npm run test:e2e      # Playwright (builds app, starts API, runs e2e/)
+npm run test:all      # both
 npm run build
 ```
 
-GitHub Actions runs both on push and pull requests to `main`.
+GitHub Actions runs unit tests, production build, and E2E on push/PR to `main`.
+
+### Production checklist
+
+- Apply all `supabase/migrations/` (including `017_product_events.sql`)
+- Set `SENTRY_DSN` and `VITE_SENTRY_DSN` for error monitoring (optional)
+- Stripe webhooks pointed at `/webhook/stripe` with signing secret
+- `GET /api/health` for uptime checks
+- Staging: [docs/STAGING.md](./docs/STAGING.md) · Metrics: [docs/METRICS.md](./docs/METRICS.md)
+- Mobile release: [docs/RELEASE.md](./docs/RELEASE.md)
+- See [docs/RUNBOOK.md](./docs/RUNBOOK.md) for billing and API troubleshooting
+
+### E2E credentials (optional)
+
+For authenticated Playwright tests, set in CI secrets or locally:
+
+`E2E_USER_EMAIL`, `E2E_USER_PASSWORD`, plus real `VITE_SUPABASE_*` (staging user with tutorial completed).
 
 ## Deploy
 
