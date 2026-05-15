@@ -1,24 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useProfile } from '../context/ProfileContext'
-import { getWhatsNewDismissStorageKey } from '../lib/updateBannerVersion'
-
-function readDismissed(): boolean {
-  try {
-    return window.localStorage.getItem(getWhatsNewDismissStorageKey()) === '1'
-  } catch {
-    return false
-  }
-}
-
-function persistDismissed() {
-  try {
-    window.localStorage.setItem(getWhatsNewDismissStorageKey(), '1')
-  } catch {
-    // ignore
-  }
-}
+import { markWhatsNewSeenForCurrentVersion, shouldShowWhatsNewUpdatePopup } from '../lib/updateBannerVersion'
 
 type WhatsNewUpdateModalProps = {
+  /** Signed-in user id (session); used to gate mount until auth is established. */
+  userId: string
   /** Optional: e.g. open Account Settings after dismiss so users can review plan / legal. */
   onOpenAccountSettings?: () => void
 }
@@ -26,34 +13,23 @@ type WhatsNewUpdateModalProps = {
 /**
  * Lightweight “What’s New” for returning users after login (localStorage only).
  */
-export default function WhatsNewUpdateModal({ onOpenAccountSettings }: WhatsNewUpdateModalProps) {
-  const { profile, loading, error } = useProfile()
+export default function WhatsNewUpdateModal({ userId, onOpenAccountSettings }: WhatsNewUpdateModalProps) {
+  const { profile, loading } = useProfile()
   const [open, setOpen] = useState(false)
 
-  const eligible = useMemo(() => {
-    if (loading || !profile || error) return false
-    if (!profile.has_seen_tutorial) return false
-    if (profile.needs_coaching_workspace_setup) return false
-    return true
-  }, [loading, profile, error])
-
   useEffect(() => {
-    if (!eligible) {
+    if (!userId || loading) {
       setOpen(false)
       return
     }
-    if (readDismissed()) {
-      setOpen(false)
-      return
-    }
-    setOpen(true)
-  }, [eligible])
+    setOpen(shouldShowWhatsNewUpdatePopup(profile, loading))
+  }, [userId, loading, profile?.id, profile?.has_seen_tutorial, profile?.needs_coaching_workspace_setup])
 
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        persistDismissed()
+        markWhatsNewSeenForCurrentVersion()
         setOpen(false)
       }
     }
@@ -71,7 +47,7 @@ export default function WhatsNewUpdateModal({ onOpenAccountSettings }: WhatsNewU
   }, [open])
 
   function dismiss() {
-    persistDismissed()
+    markWhatsNewSeenForCurrentVersion()
     setOpen(false)
   }
 
@@ -86,7 +62,7 @@ export default function WhatsNewUpdateModal({ onOpenAccountSettings }: WhatsNewU
 
   if (!open) return null
 
-  return (
+  return createPortal(
     <div className="whats-new-overlay" role="presentation" onClick={handleBackdropClick}>
       <div
         className="whats-new-dialog card"
@@ -119,6 +95,7 @@ export default function WhatsNewUpdateModal({ onOpenAccountSettings }: WhatsNewU
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

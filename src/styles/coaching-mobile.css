@@ -1,0 +1,110 @@
+/* Mobile / Capacitor: single column, touch-friendly, no horizontal bleed */
+@media (max-width: 640px) {
+  .app {
+    padding: 1.25rem 1rem 2rem;
+    max-width: 100%;
+  }
+
+  .header h1 {
+    font-size: 1.45rem;
+  }
+
+  .lede {
+    font-size: 0.875rem;
+  }
+
+  .card {
+    padding: 1.25rem 1.1rem;
+  }
+
+  .btn-primary {
+    min-height: 2.75rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.9375rem;
+  }
+
+  .mode-option {
+    min-height: 2.5rem;
+    padding: 0.55rem 0.5rem;
+  }
+
+  .btn-section-copy-icon {
+    opacity: 0.72;
+  }
+
+  .output-doc-text,
+  .output-doc-bullets li {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .output-panel-head-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .output-gen-badge {
+    align-self: flex-start;
+  }
+
+  .btn-copy-entire--primary {
+    width: 100%;
+    justify-content: center;
+    margin-top: 0;
+  }
+
+  .output-card {
+    position: static;
+  }
+
+  .output-empty {
+    padding: 1.75rem 0.85rem;
+  }
+
+  .output-empty-doc {
+    padding: 1.75rem 1rem 2rem;
+  }
+
+  .output-top-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  .output-doc-summary {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+  }
+
+  .output-doc-summary-sep {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .app[data-mobile-sticky-gen='on'] {
+    padding-bottom: calc(6rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .app[data-mobile-sticky-gen='on'] .tutorial-generate-anchor {
+    position: fixed;
+    left: max(1rem, env(safe-area-inset-left, 0px));
+    right: max(1rem, env(safe-area-inset-right, 0px));
+    bottom: max(0.65rem, env(safe-area-inset-bottom, 0px));
+    z-index: 45;
+    margin: 0;
+    padding: 0.65rem 0 0.15rem;
+    background: linear-gradient(
+      180deg,
+      rgba(7, 10, 15, 0) 0%,
+      rgba(7, 10, 15, 0.91) 28%,
+      var(--bg) 65%
+    );
+  }
+
+  .copy-form-toast {
+    bottom: max(6.75rem, calc(env(safe-area-inset-bottom, 0px) + 5.75rem));
+  }
+}
+

@@ -164,7 +164,10 @@ export default function App() {
             ) : (
               <CoachingApp />
             )}
-            <WhatsNewUpdateModal onOpenAccountSettings={() => setView('settings')} />
+            <WhatsNewUpdateModal
+              userId={session.user.id}
+              onOpenAccountSettings={() => setView('settings')}
+            />
           </>
         </ProfileProvider>
         <FeedbackFab client={client} userId={session.user.id} userEmail={session.user.email ?? null} />
