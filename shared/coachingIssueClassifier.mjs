@@ -6,7 +6,10 @@
 import { formatPersonName } from './coachingOutput.mjs'
 import { isLightReminderCoaching, stripToneOnlyNotes } from './coachingReminderTone.mjs'
 import { parseCoachingWorkspace } from './coachingWorkspace.mjs'
-import { shouldUseMobileExpertContext } from './coachingContextRouting.mjs'
+import {
+  isWirelessSalesPerformanceTopic,
+  shouldUseMobileExpertContext,
+} from './coachingContextRouting.mjs'
 import { evaluateOslMetricIntelligence } from './oslMetricIntelligence.mjs'
 
 /** @typedef {'compliance_security' | 'attendance' | 'performance_sales' | 'recognition_positive' | 'unspecified'} IssuePrimary */
@@ -199,14 +202,39 @@ export function buildDeterministicCoachingForm(payload) {
   const notesBit = notes ? ` ${notes}` : ''
 
   if (mode === 'recognition') {
+    const metricIntel =
+      useMobileExpertContext && isWirelessSalesPerformanceTopic(payload)
+        ? evaluateOslMetricIntelligence(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`, 'recognition')
+        : { metrics: {}, combinedInsight: null }
+    const wins = [
+      metricIntel.metrics.aps?.status === 'on_track'
+        ? `APS ${metricIntel.metrics.aps.value} is on track (goal >= 3.5), showing strong customer attempts and floor engagement`
+        : '',
+      metricIntel.metrics.hpa?.status === 'on_track'
+        ? `HPA ${metricIntel.metrics.hpa.value} is on track (goal <= 6.0), showing efficient activation productivity`
+        : '',
+      metricIntel.metrics.mpt?.status === 'on_track'
+        ? `MPT ${metricIntel.metrics.mpt.value} is on track (goal <= 45), showing strong transaction flow`
+        : '',
+    ].filter(Boolean)
+
     const pre = `${name} — ${reason}.${notesBit} Want to recognize the positive contribution described.`
     const category = `Recognition — ${reason}.`
-    const situation = `${name} demonstrated the behavior noted above.`
+    const situation =
+      wins.length > 0
+        ? `${name} demonstrated strong wireless execution: ${wins.join('; ')}.`
+        : `${name} demonstrated the behavior noted above.`
     const behavior = notes
       ? `${name} — ${reason}. ${notes}`
       : `${name} — ${reason}.`
-    const impact = `This supports the team when people step up as described.`
-    const nextSteps = `• Continue the strengths shown\n• Keep setting a solid example for the team\n• Build on what is working`
+    const impact =
+      wins.length > 0
+        ? `This supports conversion flow and keeps electronics traffic moving with better consistency.`
+        : `This supports the team when people step up as described.`
+    const nextSteps =
+      wins.length > 0
+        ? `• Keep current APS/HPA/MPT execution habits\n• Continue strong discovery and conversion rhythm\n• Share what is working with the team during the next shift`
+        : `• Continue the strengths shown\n• Keep setting a solid example for the team\n• Build on what is working`
     const followUp = `Will continue to encourage this behavior and check in on how things are going.`
     return joinSections(pre, category, situation, behavior, impact, nextSteps, followUp)
   }
@@ -246,13 +274,13 @@ export function buildDeterministicCoachingForm(payload) {
           : { metrics: {}, combinedInsight: null }
       const metricRows = [
         metricIntel.metrics.aps
-          ? `APS ${metricIntel.metrics.aps.value} (${metricIntel.metrics.aps.status === 'on_track' ? 'On Track' : 'Needs Coaching'} vs >= 3.5)`
+          ? `APS ${metricIntel.metrics.aps.value} (${metricIntel.metrics.aps.severityLabel} vs >= 3.5)`
           : '',
         metricIntel.metrics.hpa
-          ? `HPA ${metricIntel.metrics.hpa.value} (${metricIntel.metrics.hpa.status === 'on_track' ? 'On Track' : 'Needs Coaching'} vs <= 6.0)`
+          ? `HPA ${metricIntel.metrics.hpa.value} (${metricIntel.metrics.hpa.severityLabel} vs <= 6.0)`
           : '',
         metricIntel.metrics.mpt
-          ? `MPT ${metricIntel.metrics.mpt.value} (${metricIntel.metrics.mpt.status === 'on_track' ? 'On Track' : 'Needs Coaching'} vs <= 45)`
+          ? `MPT ${metricIntel.metrics.mpt.value} (${metricIntel.metrics.mpt.severityLabel} vs <= 45)`
           : '',
       ].filter(Boolean)
 
@@ -290,26 +318,26 @@ export function buildDeterministicCoachingForm(payload) {
           : `When execution slips on what we track, it affects results the team is responsible for.`
       let nextSteps = `• Address the specific gap described above\n• Ask for clarification on expectations if needed\n• Manager check-in to review progress`
       if (useMobileExpertContext && metricIntel.combinedInsight) {
-        nextSteps = `• ${metricIntel.combinedInsight.coachingFocus[0]}\n• ${metricIntel.combinedInsight.coachingFocus[1]}\n• Manager check-in on APS/HPA/MPT trend next shift`
+        nextSteps = `• 7-day plan: ${metricIntel.combinedInsight.coachingFocus[0]}\n• 7-day plan: ${metricIntel.combinedInsight.coachingFocus[1]}\n• Track APS/HPA/MPT daily and review with Team Lead in 3-7 days`
       } else if (useMobileExpertContext && metricRows.length > 0) {
         /** @type {string[]} */
         const bullets = []
         if (metricIntel.metrics.aps?.status === 'needs_coaching') {
-          bullets.push('Increase floor approaches and eligibility-check attempts each hour')
+          bullets.push('7-day plan: Minimum 10 tablet attempts per shift with stronger floor presence')
         }
         if (metricIntel.metrics.hpa?.status === 'needs_coaching') {
-          bullets.push('Tighten discovery and conversion urgency during peak traffic')
+          bullets.push('7-day plan: Tighten discovery and conversion urgency during peak traffic windows')
         }
         if (metricIntel.metrics.mpt?.status === 'needs_coaching') {
-          bullets.push('Prep workflow steps ahead to reduce transaction delays')
+          bullets.push('7-day plan: Reset within 5 minutes after each transaction and prep next activation step earlier')
         }
         if (bullets.length > 0) {
-          while (bullets.length < 2) bullets.push('Maintain consistent execution through the full shift')
-          bullets.push('Manager check-in on metric trend next shift')
+          while (bullets.length < 2) bullets.push('7-day plan: Ask discovery questions with every electronics customer')
+          bullets.push('Track APS/HPA/MPT daily and review with Team Lead in 3-7 days')
           nextSteps = bullets.map((b) => `• ${b}`).join('\n')
         }
       }
-      const followUp = `Follow up on the next visit to review progress on the topic discussed.`
+      const followUp = `Quick metric follow-up in 3-7 days to review trend progress and adjust focus.`
       return joinSections(pre, category, situation, behavior, impact, nextSteps, followUp)
     }
     default: {

@@ -47,7 +47,7 @@ describe('buildCoachingLogMessages', () => {
       role: 'ME',
     })
     assert.ok(result)
-    assert.match(result.system, /OSL METRIC INTELLIGENCE/i)
+    assert.match(result.system, /MOBILE EXPERT METRIC INTELLIGENCE/i)
     assert.match(result.system, /APS: 3.2.*Needs Coaching/i)
     assert.match(result.system, /HPA: 7.1.*Needs Coaching/i)
     assert.match(result.system, /HPA goal: <= 6.0/i)
@@ -64,8 +64,37 @@ describe('buildCoachingLogMessages', () => {
       role: 'manager',
     })
     assert.ok(result)
-    assert.doesNotMatch(result.system, /OSL METRIC INTELLIGENCE/i)
+    assert.doesNotMatch(result.system, /MOBILE EXPERT METRIC INTELLIGENCE/i)
     assert.match(result.system, /General workplace/i)
+  })
+
+  it('does not inject metric upgrade when topic is non-wireless', () => {
+    const result = buildCoachingLogMessages('coaching_log', {
+      employeeName: 'Alex',
+      coachingReason: 'Attendance follow-up',
+      notes: 'Late to shift',
+      mode: 'coaching',
+      coachingWorkspace: 'mobile_sales',
+      coachingType: 'mobile_expert',
+      role: 'ME',
+    })
+    assert.ok(result)
+    assert.doesNotMatch(result.system, /MOBILE EXPERT METRIC INTELLIGENCE/i)
+  })
+
+  it('injects positive metric intelligence in recognition mode for mobile expert metric topics', () => {
+    const result = buildCoachingLogMessages('coaching_log', {
+      employeeName: 'Alex',
+      coachingReason: 'Great APS and HPA trend',
+      notes: 'APS 4.1 HPA 5.6',
+      mode: 'recognition',
+      coachingWorkspace: 'mobile_sales',
+      coachingType: 'mobile_expert',
+      role: 'ME',
+    })
+    assert.ok(result)
+    assert.match(result.system, /MOBILE EXPERT METRIC INTELLIGENCE/i)
+    assert.match(result.system, /RECOGNITION UPGRADE/i)
   })
 })
 

@@ -18,6 +18,18 @@ describe('evaluateOslMetricIntelligence', () => {
     assert.equal(out.combinedInsight?.label, 'Low APS + High HPA')
     assert.match(String(out.combinedInsight?.diagnosis), /not creating enough opportunities/i)
   })
+
+  it('applies severity tiers for APS/HPA/MPT', () => {
+    const out = evaluateOslMetricIntelligence('APS 2.5 HPA 7.8 MPT 49')
+    assert.equal(out.metrics.aps?.severityLabel, 'Needs Improvement')
+    assert.equal(out.metrics.hpa?.severityLabel, 'Needs Improvement')
+    assert.equal(out.metrics.mpt?.severityLabel, 'Slightly Above Goal')
+  })
+
+  it('detects high MPT + low APS signal', () => {
+    const out = evaluateOslMetricIntelligence('APS 2.6 MPT 62')
+    assert.equal(out.combinedInsight?.label, 'High MPT + Low APS')
+  })
 })
 
 describe('buildOslMetricPromptContext', () => {
@@ -30,5 +42,12 @@ describe('buildOslMetricPromptContext', () => {
     assert.match(ctx, /APS goal: >= 3.5/i)
     assert.match(ctx, /HPA goal: <= 6.0/i)
     assert.match(ctx, /HPA: 6.2.*Needs Coaching/i)
+  })
+
+  it('includes realistic field coaching language and 7-day action-plan guidance', () => {
+    const ctx = buildOslMetricPromptContext('APS 2.5 HPA 7.8 MPT 49')
+    assert.match(ctx, /get customers to the tablet/i)
+    assert.match(ctx, /7-day action plan/i)
+    assert.match(ctx, /Severity: Needs Improvement/i)
   })
 })

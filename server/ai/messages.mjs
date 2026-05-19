@@ -5,7 +5,10 @@ import {
   normalizeIssueText,
 } from '../../shared/coachingIssueClassifier.mjs'
 import { isLightReminderCoaching } from '../../shared/coachingReminderTone.mjs'
-import { shouldUseMobileExpertContext } from '../../shared/coachingContextRouting.mjs'
+import {
+  isWirelessSalesPerformanceTopic,
+  shouldUseMobileExpertContext,
+} from '../../shared/coachingContextRouting.mjs'
 import { buildOslMetricPromptContext } from '../../shared/oslMetricIntelligence.mjs'
 import {
   COACHING_PROMPT,
@@ -14,6 +17,8 @@ import {
   GENERAL_COACHING_USER_PREFIX,
   GENERAL_RECOGNITION_PROMPT,
   GENERAL_RECOGNITION_USER_PREFIX,
+  MOBILE_EXPERT_METRIC_COACHING_UPGRADE,
+  MOBILE_EXPERT_METRIC_RECOGNITION_UPGRADE,
   RECOGNITION_PROMPT,
   RECOGNITION_USER_PREFIX,
   REMINDER_COACHING_MODE,
@@ -98,6 +103,8 @@ export function buildCoachingLogMessages(action, payload) {
   const workspace = payload?.coachingWorkspace === 'general_workplace' ? 'general_workplace' : 'mobile_sales'
   const useMobileExpertContext = workspace === 'mobile_sales' && shouldUseMobileExpertContext(payload)
   const effectiveWorkspace = useMobileExpertContext ? 'mobile_sales' : 'general_workplace'
+  const wirelessPerformanceTopic =
+    useMobileExpertContext && isWirelessSalesPerformanceTopic(payload)
 
   const blob = normalizeIssueText(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`)
   const { primary: issuePrimary } = classifyIssue(blob, mode)
@@ -110,8 +117,8 @@ export function buildCoachingLogMessages(action, payload) {
   const reminderTone =
     mode === 'coaching' && isLightReminderCoaching(payload?.notes, payload?.coachingReason)
   const metricContext =
-    mode === 'coaching' && useMobileExpertContext
-      ? buildOslMetricPromptContext(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`)
+    wirelessPerformanceTopic
+      ? buildOslMetricPromptContext(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`, { mode })
       : ''
 
   let systemPrompt
@@ -120,13 +127,16 @@ export function buildCoachingLogMessages(action, payload) {
       effectiveWorkspace === 'general_workplace'
         ? `${GENERAL_RECOGNITION_PROMPT}\n\nTOPIC GUIDE:\n${topicGuide}`
         : `${RECOGNITION_PROMPT}\n\nTOPIC GUIDE:\n${topicGuide}`
+    if (metricContext) {
+      systemPrompt += `\n\n${metricContext}\n\n${MOBILE_EXPERT_METRIC_RECOGNITION_UPGRADE}`
+    }
   } else {
     systemPrompt =
       effectiveWorkspace === 'general_workplace'
         ? `${GENERAL_COACHING_PROMPT}\n\nTOPIC GUIDE (tone and boundaries—not a template to paste):\n${topicGuide}`
         : `${COACHING_PROMPT}\n\nTOPIC GUIDE (tone and boundaries—not a template to paste):\n${topicGuide}`
     if (metricContext) {
-      systemPrompt += `\n\n${metricContext}`
+      systemPrompt += `\n\n${metricContext}\n\n${MOBILE_EXPERT_METRIC_COACHING_UPGRADE}`
     }
     if (reminderTone) {
       systemPrompt += `\n\n${REMINDER_COACHING_MODE}`

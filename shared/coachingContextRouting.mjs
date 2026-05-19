@@ -51,6 +51,35 @@ function hasGeneralWorkplaceSignal(text) {
   )
 }
 
+const WIRELESS_PERFORMANCE_TOPIC_TERMS = [
+  'aps',
+  'hpa',
+  'mpt',
+  'postpaid',
+  'prepaid',
+  'warp',
+  'accessory',
+  'accessories',
+  'conversion',
+  'activation',
+  'activations',
+  'wireless sales',
+  'eligibility check',
+  'tablet attempts',
+]
+
+/**
+ * @param {{
+ *   coachingReason?: string
+ *   notes?: string
+ * }} payload
+ */
+export function isWirelessSalesPerformanceTopic(payload) {
+  const text = norm(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`)
+  if (!text) return false
+  return WIRELESS_PERFORMANCE_TOPIC_TERMS.some((term) => text.includes(term))
+}
+
 /**
  * Returns true only when we should use Mobile Expert wireless context (APS/HPA/MPT + OSL/Walmart sales lane).
  * @param {{

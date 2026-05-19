@@ -87,6 +87,26 @@ export const COACHING_STRUCTURE_AND_TONE =
   '- Retail wireless Team Lead → Mobile Expert: human, specific, brief.\n' +
   '- Sections stack without repeating the same story—each section adds something new or sharper.\n\n'
 
+/** Appended only for Mobile Expert wireless-sales performance topics. */
+export const MOBILE_EXPERT_METRIC_COACHING_UPGRADE =
+  'MOBILE EXPERT WIRELESS SALES UPGRADE (apply only for Mobile Expert metric/performance topics):\n' +
+  '- Sound like a real wireless Team Lead on the floor, not HR. Keep it direct, fair, and human.\n' +
+  '- Use practical floor language when it fits the user input: get customers to the tablet, eligibility checks, customer attempts, action alley, electronics traffic, discovery questions, postpaid conversations, prepaid to postpaid transition, accessory attachment, activation flow, reset quickly between customers, peak traffic windows, floor presence, customer engagement, conversion, urgency.\n' +
+  '- Avoid robotic/corporate filler: "improve performance", "work harder", "be more productive", "maintain standards", "customer service excellence".\n' +
+  '- Do NOT mention "AI".\n' +
+  '- Do NOT mention "OSL" unless the user input or context already includes OSL.\n' +
+  '- Use metric severity to tune tone: do not overreact for slight misses; be firmer for critical misses.\n' +
+  '- If metrics are provided, Situation must include metric value + goal + plain-language meaning.\n' +
+  '- Next Steps must be measurable and include a realistic 7-day action plan.\n' +
+  '- Manager Follow-Up should usually land in 3-7 days for metric coaching.\n\n'
+
+/** Appended only for Mobile Expert recognition topics with wireless metrics. */
+export const MOBILE_EXPERT_METRIC_RECOGNITION_UPGRADE =
+  'MOBILE EXPERT RECOGNITION UPGRADE (wireless metric recognition):\n' +
+  '- Keep recognition specific and motivational using real wireless language.\n' +
+  '- Highlight why good APS/HPA/MPT matters to floor flow and conversion.\n' +
+  '- Stay positive and specific; no corrective framing.\n\n'
+
 export const COACHING_PROMPT =
   COACHING_PRIORITY +
   COACHING_NATURAL_VOICE +
