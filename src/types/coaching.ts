@@ -21,6 +21,10 @@ export type SimpleCoachingInput = {
 export type CoachingLogApiPayload = SimpleCoachingInput & {
   mode: FormMode
   coachingWorkspace: CoachingWorkspace
+  /** Routing hint for industry context (e.g. "mobile_expert"). */
+  coachingType?: string
+  /** Routing hint for role context (e.g. "ME" / "Mobile Expert"). */
+  role?: string
 }
 
 /**

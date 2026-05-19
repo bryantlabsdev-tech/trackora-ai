@@ -47,13 +47,22 @@ export const COACHING_NATURAL_VOICE =
 /** Corrective coaching — natural prose, anchored to user input; topic guide appended per request. */
 export const RETAIL_WIRELESS_METRIC_DEFINITIONS =
   'RETAIL WIRELESS METRICS — use EXACTLY these definitions whenever coachingReason or notes mention APS, HPA, MPT, or performance on the sales floor. Never substitute other industry meanings (e.g. do not treat APS as “accessories per sale” or anything not defined below).\n' +
-  '- APS (Attempts Per Shift): how many customers the rep gets to the tablet to check eligibility (AT&T, Verizon, T-Mobile). Low APS means the rep is not creating enough real attempts.\n' +
-  '- HPA (Hours Per Activation): how many hours pass between successful postpaid activations/sales. Lower HPA is better. High HPA means the rep is going too long between closed activations.\n' +
-  '- MPT (Minutes Per Transaction): the time between customer interactions/transactions. It does NOT mean how fast the rep completes one customer transaction. High MPT means too much downtime between customer opportunities.\n' +
+  '- APS (Attempts Per Shift): activity/customer-engagement volume — how many real customer attempts the rep creates in a shift. Higher APS is better.\n' +
+  '- HPA (Hours Per Activation): productivity/activation efficiency — hours between successful postpaid activations. Lower HPA is better.\n' +
+  '- MPT (Minutes Per Transaction): transaction speed/process efficiency — minutes per transaction flow. Lower MPT is better.\n' +
+  'BENCHMARKS (do not invert):\n' +
+  '- APS goal: 3.5 or higher (APS >= 3.5 = on track; APS < 3.5 = needs coaching).\n' +
+  '- HPA goal: 6.0 or lower (HPA <= 6.0 = on track; HPA > 6.0 = needs coaching).\n' +
+  '- MPT goal: 45 or lower (MPT <= 45 = on track; MPT > 45 = needs coaching).\n' +
   'INTERPRETATION (only when the user’s input supports it; never invent numbers):\n' +
   '- Low APS → not enough engagement / not enough genuine attempts to eligibility.\n' +
-  '- High HPA → too long between postpaid wins / not closing often enough.\n' +
-  '- High MPT → gaps between touches on the floor / not cycling to the next opportunity quickly enough.\n' +
+  '- High HPA → too long between postpaid wins / productivity-conversion gap.\n' +
+  '- High MPT → transaction flow is too slow / process friction during activations.\n' +
+  'COMBINED METRIC INTELLIGENCE (when those combinations appear in user-provided numbers):\n' +
+  '- Low APS + High HPA: low opportunities plus low productivity. Coach customer engagement volume and conversion.\n' +
+  '- High APS + High HPA: activity exists but conversion efficiency is weak. Coach discovery, qualification, objection handling, and closing.\n' +
+  '- Good APS + High MPT: opportunities exist but transaction speed is slow. Coach process flow, system confidence, and preparation.\n' +
+  '- Low APS + Good HPA: conversion can work when engaged, but volume is low. Coach attempt volume while maintaining quality.\n' +
   'Only use APS, HPA, and MPT values that appear in the JSON. Never guess labels, goals, or KPIs.\n\n'
 
 export const COACHING_SCENARIO_VS_METRICS =

@@ -35,6 +35,38 @@ describe('buildCoachingLogMessages', () => {
   it('returns null for non-coaching_log actions', () => {
     assert.equal(buildCoachingLogMessages('refine_section', {}), null)
   })
+
+  it('injects OSL metric intelligence for mobile sales coaching metrics', () => {
+    const result = buildCoachingLogMessages('coaching_log', {
+      employeeName: 'Alex',
+      coachingReason: 'Metric check',
+      notes: 'APS 3.2, HPA 7.1, MPT 52',
+      mode: 'coaching',
+      coachingWorkspace: 'mobile_sales',
+      coachingType: 'mobile_expert',
+      role: 'ME',
+    })
+    assert.ok(result)
+    assert.match(result.system, /OSL METRIC INTELLIGENCE/i)
+    assert.match(result.system, /APS: 3.2.*Needs Coaching/i)
+    assert.match(result.system, /HPA: 7.1.*Needs Coaching/i)
+    assert.match(result.system, /HPA goal: <= 6.0/i)
+  })
+
+  it('routes to general coaching context when role/coaching type are non-mobile', () => {
+    const result = buildCoachingLogMessages('coaching_log', {
+      employeeName: 'Alex',
+      coachingReason: 'Leadership coaching conversation',
+      notes: 'APS 3.2, HPA 7.1, MPT 52',
+      mode: 'coaching',
+      coachingWorkspace: 'mobile_sales',
+      coachingType: 'leadership',
+      role: 'manager',
+    })
+    assert.ok(result)
+    assert.doesNotMatch(result.system, /OSL METRIC INTELLIGENCE/i)
+    assert.match(result.system, /General workplace/i)
+  })
 })
 
 describe('buildRefineSectionPrompt', () => {

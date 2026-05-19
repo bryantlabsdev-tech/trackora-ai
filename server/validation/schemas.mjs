@@ -8,6 +8,8 @@ export const coachingLogPayloadSchema = z
     employeeName: z.string().max(200).optional(),
     coachingReason: z.string().max(8_000).optional(),
     notes: z.string().max(8_000).optional(),
+    coachingType: z.string().max(120).optional(),
+    role: z.string().max(120).optional(),
     mode: formModeSchema.optional(),
     coachingWorkspace: coachingWorkspaceSchema.optional(),
     workspace: coachingWorkspaceSchema.optional(),

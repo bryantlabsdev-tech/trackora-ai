@@ -6,6 +6,8 @@
 import { formatPersonName } from './coachingOutput.mjs'
 import { isLightReminderCoaching, stripToneOnlyNotes } from './coachingReminderTone.mjs'
 import { parseCoachingWorkspace } from './coachingWorkspace.mjs'
+import { shouldUseMobileExpertContext } from './coachingContextRouting.mjs'
+import { evaluateOslMetricIntelligence } from './oslMetricIntelligence.mjs'
 
 /** @typedef {'compliance_security' | 'attendance' | 'performance_sales' | 'recognition_positive' | 'unspecified'} IssuePrimary */
 
@@ -186,6 +188,8 @@ export function leakTestForbiddenTerms(primary, mode) {
 export function buildDeterministicCoachingForm(payload) {
   const mode = payload?.mode === 'recognition' ? 'recognition' : 'coaching'
   const workspace = parseCoachingWorkspace(payload?.coachingWorkspace)
+  const useMobileExpertContext =
+    workspace === 'mobile_sales' && shouldUseMobileExpertContext(payload)
   const blob = normalizeIssueText(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`)
   const { primary } = classifyIssue(blob, mode)
   const rawName = String(payload?.employeeName ?? '')
@@ -236,14 +240,75 @@ export function buildDeterministicCoachingForm(payload) {
     }
     case 'performance_sales': {
       const pre = `${name} — ${reason}${notesBit}`
-      const category = `Performance — ${issueRef}.`
-      const situation = `${name}, the focus is: ${reason}.`
-      const behavior = `Execution needs to line up with what was described—stay specific to that topic.`
+      const metricIntel =
+        useMobileExpertContext
+          ? evaluateOslMetricIntelligence(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`)
+          : { metrics: {}, combinedInsight: null }
+      const metricRows = [
+        metricIntel.metrics.aps
+          ? `APS ${metricIntel.metrics.aps.value} (${metricIntel.metrics.aps.status === 'on_track' ? 'On Track' : 'Needs Coaching'} vs >= 3.5)`
+          : '',
+        metricIntel.metrics.hpa
+          ? `HPA ${metricIntel.metrics.hpa.value} (${metricIntel.metrics.hpa.status === 'on_track' ? 'On Track' : 'Needs Coaching'} vs <= 6.0)`
+          : '',
+        metricIntel.metrics.mpt
+          ? `MPT ${metricIntel.metrics.mpt.value} (${metricIntel.metrics.mpt.status === 'on_track' ? 'On Track' : 'Needs Coaching'} vs <= 45)`
+          : '',
+      ].filter(Boolean)
+
+      const category =
+        useMobileExpertContext && metricRows.length > 0
+          ? `Performance / Wireless Metrics — ${metricRows.join('; ')}.`
+          : `Performance — ${issueRef}.`
+
+      const situation =
+        useMobileExpertContext && metricRows.length > 0
+          ? `${name}, current metrics show: ${metricRows.join('; ')}.`
+          : `${name}, the focus is: ${reason}.`
+
+      let behavior = `Execution needs to line up with what was described—stay specific to that topic.`
+      if (useMobileExpertContext && metricIntel.combinedInsight) {
+        behavior = `${metricIntel.combinedInsight.diagnosis} Focus on ${metricIntel.combinedInsight.coachingFocus.join(' and ')}.`
+      } else if (useMobileExpertContext && metricRows.length > 0) {
+        const focus = []
+        if (metricIntel.metrics.aps?.status === 'needs_coaching') {
+          focus.push('raising customer approaches and engagement volume')
+        }
+        if (metricIntel.metrics.hpa?.status === 'needs_coaching') {
+          focus.push('improving discovery-to-close productivity')
+        }
+        if (metricIntel.metrics.mpt?.status === 'needs_coaching') {
+          focus.push('speeding up activation process flow')
+        }
+        if (focus.length > 0) {
+          behavior = `Coaching focus: ${focus.join(', ')}.`
+        }
+      }
       const impact =
         workspace === 'general_workplace'
           ? `When expectations slip on what we track, it affects team results and trust.`
           : `When execution slips on what we track, it affects results the team is responsible for.`
-      const nextSteps = `• Address the specific gap described above\n• Ask for clarification on expectations if needed\n• Manager check-in to review progress`
+      let nextSteps = `• Address the specific gap described above\n• Ask for clarification on expectations if needed\n• Manager check-in to review progress`
+      if (useMobileExpertContext && metricIntel.combinedInsight) {
+        nextSteps = `• ${metricIntel.combinedInsight.coachingFocus[0]}\n• ${metricIntel.combinedInsight.coachingFocus[1]}\n• Manager check-in on APS/HPA/MPT trend next shift`
+      } else if (useMobileExpertContext && metricRows.length > 0) {
+        /** @type {string[]} */
+        const bullets = []
+        if (metricIntel.metrics.aps?.status === 'needs_coaching') {
+          bullets.push('Increase floor approaches and eligibility-check attempts each hour')
+        }
+        if (metricIntel.metrics.hpa?.status === 'needs_coaching') {
+          bullets.push('Tighten discovery and conversion urgency during peak traffic')
+        }
+        if (metricIntel.metrics.mpt?.status === 'needs_coaching') {
+          bullets.push('Prep workflow steps ahead to reduce transaction delays')
+        }
+        if (bullets.length > 0) {
+          while (bullets.length < 2) bullets.push('Maintain consistent execution through the full shift')
+          bullets.push('Manager check-in on metric trend next shift')
+          nextSteps = bullets.map((b) => `• ${b}`).join('\n')
+        }
+      }
       const followUp = `Follow up on the next visit to review progress on the topic discussed.`
       return joinSections(pre, category, situation, behavior, impact, nextSteps, followUp)
     }

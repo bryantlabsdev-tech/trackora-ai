@@ -5,6 +5,8 @@ import {
   normalizeIssueText,
 } from '../../shared/coachingIssueClassifier.mjs'
 import { isLightReminderCoaching } from '../../shared/coachingReminderTone.mjs'
+import { shouldUseMobileExpertContext } from '../../shared/coachingContextRouting.mjs'
+import { buildOslMetricPromptContext } from '../../shared/oslMetricIntelligence.mjs'
 import {
   COACHING_PROMPT,
   COACHING_USER_PREFIX,
@@ -94,29 +96,38 @@ export function buildCoachingLogMessages(action, payload) {
   if (action !== 'coaching_log') return null
   const mode = payload?.mode === 'recognition' ? 'recognition' : 'coaching'
   const workspace = payload?.coachingWorkspace === 'general_workplace' ? 'general_workplace' : 'mobile_sales'
+  const useMobileExpertContext = workspace === 'mobile_sales' && shouldUseMobileExpertContext(payload)
+  const effectiveWorkspace = useMobileExpertContext ? 'mobile_sales' : 'general_workplace'
 
   const blob = normalizeIssueText(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`)
   const { primary: issuePrimary } = classifyIssue(blob, mode)
   let topicGuide = buildCoachingClassRules(issuePrimary, mode)
-  if (workspace === 'general_workplace') {
+  if (effectiveWorkspace === 'general_workplace') {
     topicGuide +=
       '\n\nWORKSPACE: General workplace. Avoid retail wireless jargon (APS/HPA/MPT, activations, postpaid, sales floor, Mobile Expert) and default sales KPIs unless the user explicitly used them.'
   }
 
   const reminderTone =
     mode === 'coaching' && isLightReminderCoaching(payload?.notes, payload?.coachingReason)
+  const metricContext =
+    mode === 'coaching' && useMobileExpertContext
+      ? buildOslMetricPromptContext(`${payload?.coachingReason ?? ''} ${payload?.notes ?? ''}`)
+      : ''
 
   let systemPrompt
   if (mode === 'recognition') {
     systemPrompt =
-      workspace === 'general_workplace'
+      effectiveWorkspace === 'general_workplace'
         ? `${GENERAL_RECOGNITION_PROMPT}\n\nTOPIC GUIDE:\n${topicGuide}`
         : `${RECOGNITION_PROMPT}\n\nTOPIC GUIDE:\n${topicGuide}`
   } else {
     systemPrompt =
-      workspace === 'general_workplace'
+      effectiveWorkspace === 'general_workplace'
         ? `${GENERAL_COACHING_PROMPT}\n\nTOPIC GUIDE (tone and boundaries—not a template to paste):\n${topicGuide}`
         : `${COACHING_PROMPT}\n\nTOPIC GUIDE (tone and boundaries—not a template to paste):\n${topicGuide}`
+    if (metricContext) {
+      systemPrompt += `\n\n${metricContext}`
+    }
     if (reminderTone) {
       systemPrompt += `\n\n${REMINDER_COACHING_MODE}`
     }
@@ -124,9 +135,10 @@ export function buildCoachingLogMessages(action, payload) {
 
   let userPreamble
   if (mode === 'recognition') {
-    userPreamble = workspace === 'general_workplace' ? GENERAL_RECOGNITION_USER_PREFIX : RECOGNITION_USER_PREFIX
+    userPreamble =
+      effectiveWorkspace === 'general_workplace' ? GENERAL_RECOGNITION_USER_PREFIX : RECOGNITION_USER_PREFIX
   } else {
-    userPreamble = workspace === 'general_workplace' ? GENERAL_COACHING_USER_PREFIX : COACHING_USER_PREFIX
+    userPreamble = effectiveWorkspace === 'general_workplace' ? GENERAL_COACHING_USER_PREFIX : COACHING_USER_PREFIX
   }
 
   const body = JSON.stringify(payload ?? {}, null, 2)

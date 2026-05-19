@@ -60,8 +60,8 @@ export function isMeaninglessNotes(normalizedNotes) {
 
 /**
  * Sanitize coaching form input before model / fallback.
- * @param {{ employeeName?: unknown; coachingReason?: unknown; notes?: unknown; mode?: unknown; coachingWorkspace?: unknown; workspace?: unknown }} payload
- * @returns {{ employeeName: string; coachingReason: string; notes: string; mode: 'coaching' | 'recognition'; coachingWorkspace: 'mobile_sales' | 'general_workplace' }}
+ * @param {{ employeeName?: unknown; coachingReason?: unknown; notes?: unknown; mode?: unknown; coachingWorkspace?: unknown; workspace?: unknown; coachingType?: unknown; role?: unknown }} payload
+ * @returns {{ employeeName: string; coachingReason: string; notes: string; mode: 'coaching' | 'recognition'; coachingWorkspace: 'mobile_sales' | 'general_workplace'; coachingType: string; role: string }}
  */
 export function sanitizeCoachingPayload(payload) {
   const employeeName = stripJunkTokens(payload?.employeeName)
@@ -75,5 +75,7 @@ export function sanitizeCoachingPayload(payload) {
     .toLowerCase()
   const mode = rawMode === 'recognition' ? 'recognition' : 'coaching'
   const coachingWorkspace = parseCoachingWorkspace(payload?.coachingWorkspace ?? payload?.workspace)
-  return { employeeName, coachingReason, notes, mode, coachingWorkspace }
+  const coachingType = stripJunkTokens(payload?.coachingType)
+  const role = stripJunkTokens(payload?.role)
+  return { employeeName, coachingReason, notes, mode, coachingWorkspace, coachingType, role }
 }

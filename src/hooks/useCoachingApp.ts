@@ -279,12 +279,15 @@ export function useCoachingApp() {
   }, [input])
 
   const payload = useMemo((): CoachingLogApiPayload => {
+    const mobileExpertContext = coachingWorkspace === 'mobile_sales'
     return {
       employeeName: input.employeeName.trim(),
       coachingReason: input.coachingReason.trim(),
       notes: input.notes.trim(),
       mode: formMode,
       coachingWorkspace,
+      coachingType: mobileExpertContext ? 'mobile_expert' : 'general_workplace',
+      role: mobileExpertContext ? 'ME' : 'team_member',
     }
   }, [input, formMode, coachingWorkspace])
 
