@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useProfile } from '../context/ProfileContext'
 import { startEliteUpgrade } from '../api/startEliteUpgrade'
-import { listCoachingRecords, updateCoachingRecord } from '../api/coachingRecords'
 import { requestRoiInsights, type RoiInsights } from '../api/requestRoiInsights'
 import { getCreateBillingPortalSessionUrl, getCreateCheckoutSessionUrl } from '../lib/apiBase'
 import { supabase } from '../lib/supabase'
@@ -17,7 +16,6 @@ import {
   isOwnerFreePro,
 } from '../types/profile'
 import PrivacyPolicyContent from './PrivacyPolicyContent'
-import type { CoachingRecord, CoachingRecordStatus } from '../types/coachingRecord'
 
 type AccountSettingsProps = {
   userId: string
@@ -45,13 +43,6 @@ function formatMovement(
   return `${movement.before} -> ${movement.latest} (${deltaLabel}, ${direction})`
 }
 
-function formatDateLabel(iso: string | null): string {
-  if (!iso) return 'Not set'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return 'Not set'
-  return d.toLocaleDateString()
-}
-
 export default function AccountSettings({ userId, email, onGoToCoaching, onSignOut }: AccountSettingsProps) {
   const { profile, loading, error, refresh, replayTutorialFromSettings } = useProfile()
   const [checkoutLoading, setCheckoutLoading] = useState(false)
@@ -71,10 +62,6 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
   const [roiError, setRoiError] = useState<string | null>(null)
   const [roiData, setRoiData] = useState<RoiInsights | null>(null)
   const [roiHasData, setRoiHasData] = useState(false)
-  const [recordLoading, setRecordLoading] = useState(false)
-  const [recordError, setRecordError] = useState<string | null>(null)
-  const [records, setRecords] = useState<CoachingRecord[]>([])
-  const [recordUpdatingId, setRecordUpdatingId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!privacyModalOpen) return
@@ -114,29 +101,6 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
       cancelled = true
     }
   }, [profile?.id, loading])
-
-  useEffect(() => {
-    if (!profile || loading) return
-    let cancelled = false
-    setRecordLoading(true)
-    setRecordError(null)
-    void listCoachingRecords(25)
-      .then((result) => {
-        if (cancelled) return
-        if (!result.ok) {
-          setRecordError(result.error)
-          setRecords([])
-          return
-        }
-        setRecords(result.records)
-      })
-      .finally(() => {
-        if (!cancelled) setRecordLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [profile?.id, loading, roiData?.formsGenerated])
 
   const planLabel = profile ? getPlanDisplayLabel(profile, email ?? profile.email) : 'Free'
   const planPillClass =
@@ -362,26 +326,6 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
     }
   }
 
-  async function handleRecordStatusChange(
-    recordId: string,
-    updates: { status?: CoachingRecordStatus; markFollowUpCompleted?: boolean },
-  ) {
-    setRecordError(null)
-    setRecordUpdatingId(recordId)
-    try {
-      const result = await updateCoachingRecord(recordId, updates)
-      if (!result.ok) {
-        setRecordError(result.error)
-        return
-      }
-      setRecords((prev) => prev.map((r) => (r.id === recordId ? result.record : r)))
-      if (updates.markFollowUpCompleted) {
-        await refresh()
-      }
-    } finally {
-      setRecordUpdatingId(null)
-    }
-  }
 
   return (
     <main className="settings-page">
@@ -631,75 +575,6 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
               </ul>
             </>
           )}
-        </article>
-
-        <article className="card settings-card">
-          <h2 className="card-title settings-section-title">Coaching History</h2>
-          <p className="settings-section-lead">
-            Saved generated forms with follow-up workflow status (default follow-up due in 3-7 days).
-          </p>
-          {recordLoading && (
-            <p className="settings-empty-state" role="status">
-              Loading coaching history…
-            </p>
-          )}
-          {!recordLoading && records.length === 0 && (
-            <p className="settings-empty-state">No saved coaching records yet. Generate a form to start history.</p>
-          )}
-          {!recordLoading &&
-            records.slice(0, 10).map((record) => (
-              <div key={record.id} className="settings-stack-block">
-                <dl className="settings-dl settings-dl--compact">
-                  <div className="settings-dl-row">
-                    <dt className="settings-dl-term">Rep</dt>
-                    <dd className="settings-dl-def">{record.employee_name || 'Unnamed'}</dd>
-                  </div>
-                  <div className="settings-dl-row">
-                    <dt className="settings-dl-term">Topic</dt>
-                    <dd className="settings-dl-def">{record.coaching_reason || '—'}</dd>
-                  </div>
-                  <div className="settings-dl-row">
-                    <dt className="settings-dl-term">Status</dt>
-                    <dd className="settings-dl-def">{record.status}</dd>
-                  </div>
-                  <div className="settings-dl-row">
-                    <dt className="settings-dl-term">Follow-up due</dt>
-                    <dd className="settings-dl-def">{formatDateLabel(record.follow_up_due_at)}</dd>
-                  </div>
-                  <div className="settings-dl-row">
-                    <dt className="settings-dl-term">Created</dt>
-                    <dd className="settings-dl-def">{formatDateLabel(record.created_at)}</dd>
-                  </div>
-                </dl>
-                <div className="settings-upgrade-grid">
-                  <button
-                    type="button"
-                    className="btn-secondary settings-btn"
-                    disabled={recordUpdatingId === record.id}
-                    onClick={() => void handleRecordStatusChange(record.id, { status: 'Shared' })}
-                  >
-                    Mark Shared
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary settings-btn"
-                    disabled={recordUpdatingId === record.id}
-                    onClick={() => void handleRecordStatusChange(record.id, { status: 'Follow-up Needed' })}
-                  >
-                    Needs Follow-up
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-primary settings-btn"
-                    disabled={recordUpdatingId === record.id}
-                    onClick={() => void handleRecordStatusChange(record.id, { markFollowUpCompleted: true })}
-                  >
-                    Complete Follow-up
-                  </button>
-                </div>
-              </div>
-            ))}
-          {recordError && <p className="settings-error">{recordError}</p>}
         </article>
 
         <article className="card settings-card">

@@ -49,10 +49,6 @@ export function getRoiInsightsUrl(): string {
   return `${getApiBase()}/api/insights/roi`
 }
 
-export function getCoachingRecordsUrl(): string {
-  return `${getApiBase()}/api/coaching-records`
-}
-
 /** Authenticated Elite: Free → checkout URL; Pro → proration upgrade on existing subscription. */
 export function getStartEliteUrl(): string {
   return `${getApiBase()}/api/billing/start-elite`

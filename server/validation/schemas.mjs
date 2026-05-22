@@ -2,7 +2,6 @@ import { z } from 'zod'
 
 const coachingWorkspaceSchema = z.enum(['mobile_sales', 'general_workplace'])
 const formModeSchema = z.enum(['coaching', 'recognition'])
-const coachingRecordStatusSchema = z.enum(['Draft', 'Shared', 'Completed', 'Follow-up Needed'])
 
 export const coachingLogPayloadSchema = z
   .object({
@@ -49,14 +48,6 @@ export const createCheckoutSessionSchema = z.object({
   planTier: z.enum(['pro', 'elite']).optional(),
 })
 
-export const updateCoachingRecordSchema = z
-  .object({
-    status: coachingRecordStatusSchema.optional(),
-    followUpDueAt: z.string().datetime({ offset: true }).optional().nullable(),
-    markFollowUpCompleted: z.boolean().optional(),
-  })
-  .strict()
-
 /**
  * @param {unknown} body
  * @returns {{ ok: true, data: z.infer<typeof apiAiRequestSchema> } | { ok: false, error: string }}
@@ -81,19 +72,6 @@ export function parseCreateCheckoutSession(body) {
   const parsed = createCheckoutSessionSchema.safeParse(body)
   if (!parsed.success) {
     const msg = parsed.error.issues.map((i) => i.message).join('; ') || 'Invalid checkout body'
-    return { ok: false, error: msg }
-  }
-  return { ok: true, data: parsed.data }
-}
-
-/**
- * @param {unknown} body
- * @returns {{ ok: true, data: z.infer<typeof updateCoachingRecordSchema> } | { ok: false, error: string }}
- */
-export function parseUpdateCoachingRecord(body) {
-  const parsed = updateCoachingRecordSchema.safeParse(body)
-  if (!parsed.success) {
-    const msg = parsed.error.issues.map((i) => i.message).join('; ') || 'Invalid coaching record update body'
     return { ok: false, error: msg }
   }
   return { ok: true, data: parsed.data }

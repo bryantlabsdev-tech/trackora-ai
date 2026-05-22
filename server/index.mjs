@@ -33,11 +33,7 @@ import {
 import { resyncAllProfilesFromStripe } from '../shared/resyncStripeProfiles.mjs'
 import { findSubscriptionItemForEliteUpgrade } from '../shared/eliteUpgrade.mjs'
 import { inferBillingPlanTierFromSubscription } from '../shared/stripePlanTier.mjs'
-import {
-  isWirelessSalesPerformanceTopic,
-  shouldUseMobileExpertContext,
-} from '../shared/coachingContextRouting.mjs'
-import { buildMetricSnapshot, buildRoiInsights } from '../shared/managerRoi.mjs'
+import { buildRoiInsights } from '../shared/managerRoi.mjs'
 
 import {
   debugLog,
@@ -68,7 +64,6 @@ import {
 import {
   parseApiAiRequest,
   parseCreateCheckoutSession,
-  parseUpdateCoachingRecord,
 } from './validation/schemas.mjs'
 import { handleStripeWebhookEvent } from './billing/stripeWebhookHandler.mjs'
 import { setupSentryExpress, captureServerException } from './sentry.mjs'
@@ -312,101 +307,6 @@ function usageEnvelope(profile, authEmail) {
   const isPro = effectivePremiumAccess(profile, authEmail)
   const remaining = isPro ? Number.POSITIVE_INFINITY : FREE_LIMIT - usageCount
   return { usageCount, isPro, remaining, freeLimit: FREE_LIMIT }
-}
-
-/**
- * Rich metadata for ROI and workflow insights (safe: derived from user input only).
- * @param {Record<string, unknown>} payload
- */
-function buildGenerationEventMeta(payload) {
-  const mode = payload?.mode === 'recognition' ? 'recognition' : 'coaching'
-  const workspace = payload?.coachingWorkspace === 'general_workplace' ? 'general_workplace' : 'mobile_sales'
-  const mobileExpertContext = workspace === 'mobile_sales' && shouldUseMobileExpertContext(payload)
-  const wirelessTopic = mobileExpertContext && isWirelessSalesPerformanceTopic(payload)
-  const metricSnapshot = wirelessTopic ? buildMetricSnapshot(payload) : {}
-  const metricKeys = Object.keys(metricSnapshot)
-  /** @type {'aps' | 'hpa' | 'mpt' | null} */
-  let metricFocus = null
-  for (const key of ['aps', 'hpa', 'mpt']) {
-    if (metricSnapshot[key] && metricSnapshot[key].status === 'needs_coaching') {
-      metricFocus = /** @type {'aps' | 'hpa' | 'mpt'} */ (key)
-      break
-    }
-  }
-  if (!metricFocus && metricKeys.length > 0) {
-    const first = metricKeys[0]
-    if (first === 'aps' || first === 'hpa' || first === 'mpt') metricFocus = first
-  }
-
-  let followUpDueAt = null
-  if (mode === 'coaching') {
-    const inFiveDays = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000)
-    followUpDueAt = inFiveDays.toISOString()
-  }
-
-  return {
-    mode,
-    workspace,
-    coachingType: typeof payload?.coachingType === 'string' ? payload.coachingType : '',
-    role: typeof payload?.role === 'string' ? payload.role : '',
-    employeeName: typeof payload?.employeeName === 'string' ? payload.employeeName : '',
-    mobileExpertContext,
-    wirelessSalesTopic: wirelessTopic,
-    metricFocus,
-    metricSnapshot,
-    followUpDueAt,
-  }
-}
-
-/**
- * @param {{ userId: string; payload: Record<string, unknown>; generatedForm: string; isTutorialRun: boolean }} params
- */
-async function saveCoachingRecord(params) {
-  const { userId, payload, generatedForm, isTutorialRun } = params
-  if (!supabaseAdmin || isTutorialRun) return
-  if (!generatedForm || !generatedForm.trim()) return
-
-  const mode = payload?.mode === 'recognition' ? 'recognition' : 'coaching'
-  const workspace = payload?.coachingWorkspace === 'general_workplace' ? 'general_workplace' : 'mobile_sales'
-  const metricSnapshot = buildMetricSnapshot({
-    coachingReason: payload?.coachingReason,
-    notes: payload?.notes,
-  })
-  /** @type {'aps' | 'hpa' | 'mpt' | null} */
-  let metricFocus = null
-  for (const key of ['aps', 'hpa', 'mpt']) {
-    if (metricSnapshot[key] && metricSnapshot[key].status === 'needs_coaching') {
-      metricFocus = /** @type {'aps' | 'hpa' | 'mpt'} */ (key)
-      break
-    }
-  }
-  if (!metricFocus) {
-    const first = Object.keys(metricSnapshot)[0]
-    if (first === 'aps' || first === 'hpa' || first === 'mpt') metricFocus = first
-  }
-  const followUpDueAt =
-    mode === 'coaching' ? new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString() : null
-
-  const row = {
-    user_id: userId,
-    employee_name: typeof payload?.employeeName === 'string' ? payload.employeeName : '',
-    role: typeof payload?.role === 'string' ? payload.role : '',
-    coaching_type: typeof payload?.coachingType === 'string' ? payload.coachingType : '',
-    coaching_workspace: workspace,
-    mode,
-    coaching_reason: typeof payload?.coachingReason === 'string' ? payload.coachingReason : '',
-    notes: typeof payload?.notes === 'string' ? payload.notes : '',
-    generated_form: generatedForm.trim(),
-    metric_focus: metricFocus,
-    metric_snapshot: metricSnapshot,
-    status: mode === 'coaching' ? 'Draft' : 'Shared',
-    follow_up_due_at: followUpDueAt,
-  }
-
-  const { error } = await supabaseAdmin.from('coaching_records').insert(row)
-  if (error) {
-    console.warn('[coaching_records] insert failed:', error.message)
-  }
 }
 
 async function recordServerSideGenerationUsage(userId, authEmail) {
@@ -925,97 +825,6 @@ app.get('/api/insights/roi', async (req, res) => {
   })
 })
 
-app.get('/api/coaching-records', async (req, res) => {
-  const auth = await getAuthenticatedUserId(req)
-  if (auth.error || !auth.userId) {
-    return res.status(401).json({ ok: false, error: auth.error || 'Unauthorized.' })
-  }
-  if (!supabaseAdmin) {
-    return res.status(503).json({ ok: false, error: 'Database is not configured.' })
-  }
-
-  const limitRaw = Number(req.query?.limit ?? 30)
-  const limit = Number.isFinite(limitRaw) ? Math.min(100, Math.max(1, Math.trunc(limitRaw))) : 30
-  const { data, error } = await supabaseAdmin
-    .from('coaching_records')
-    .select(
-      'id, employee_name, role, coaching_type, coaching_workspace, mode, coaching_reason, notes, generated_form, metric_focus, metric_snapshot, status, follow_up_due_at, follow_up_completed_at, created_at, updated_at',
-    )
-    .eq('user_id', auth.userId)
-    .order('created_at', { ascending: false })
-    .limit(limit)
-
-  if (error) {
-    console.error('[api/coaching-records] query failed', error.message)
-    return res.status(500).json({ ok: false, error: 'Could not load coaching records.' })
-  }
-  return res.json({ ok: true, records: Array.isArray(data) ? data : [] })
-})
-
-app.patch('/api/coaching-records/:id', async (req, res) => {
-  const auth = await getAuthenticatedUserId(req)
-  if (auth.error || !auth.userId) {
-    return res.status(401).json({ ok: false, error: auth.error || 'Unauthorized.' })
-  }
-  if (!supabaseAdmin) {
-    return res.status(503).json({ ok: false, error: 'Database is not configured.' })
-  }
-
-  const recordId = String(req.params?.id ?? '').trim()
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(recordId)) {
-    return res.status(400).json({ ok: false, error: 'Invalid coaching record id.' })
-  }
-  const parsed = parseUpdateCoachingRecord(req.body)
-  if (!parsed.ok) {
-    return res.status(400).json({ ok: false, error: parsed.error })
-  }
-
-  /** @type {Record<string, unknown>} */
-  const update = {}
-  if (parsed.data.status) {
-    update.status = parsed.data.status
-  }
-  if (parsed.data.followUpDueAt !== undefined) {
-    update.follow_up_due_at = parsed.data.followUpDueAt
-  }
-  if (parsed.data.markFollowUpCompleted === true) {
-    update.follow_up_completed_at = new Date().toISOString()
-    if (!update.status) update.status = 'Completed'
-  } else if (parsed.data.markFollowUpCompleted === false) {
-    update.follow_up_completed_at = null
-  }
-  if (Object.keys(update).length === 0) {
-    return res.status(400).json({ ok: false, error: 'No update fields provided.' })
-  }
-
-  const { data, error } = await supabaseAdmin
-    .from('coaching_records')
-    .update(update)
-    .eq('id', recordId)
-    .eq('user_id', auth.userId)
-    .select(
-      'id, employee_name, role, coaching_type, coaching_workspace, mode, coaching_reason, notes, generated_form, metric_focus, metric_snapshot, status, follow_up_due_at, follow_up_completed_at, created_at, updated_at',
-    )
-    .maybeSingle()
-
-  if (error) {
-    console.error('[api/coaching-records] update failed', error.message)
-    return res.status(500).json({ ok: false, error: 'Could not update coaching record.' })
-  }
-  if (!data) {
-    return res.status(404).json({ ok: false, error: 'Coaching record not found.' })
-  }
-
-  if (parsed.data.markFollowUpCompleted === true) {
-    void logProductEvent(auth.userId, 'coaching_followup_completed', {
-      employeeName: data.employee_name,
-      recordId: data.id,
-      status: data.status,
-    })
-  }
-  return res.json({ ok: true, record: data })
-})
-
 app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
   debugLog('SERVER_API_AI_HIT')
   const authHeader = req.headers.authorization
@@ -1190,7 +999,6 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
     payload && typeof payload === 'object'
       ? { ...payload, employeeName: formatPersonName(payload.employeeName ?? '') }
       : payload
-  const generationMeta = buildGenerationEventMeta(payloadForAi ?? {})
 
   const messages = buildCoachingLogMessages('coaching_log', payloadForAi)
   if (!messages) {
@@ -1212,19 +1020,12 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
         const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
         if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
-      if (authUserId) {
-        await saveCoachingRecord({
-          userId: authUserId,
-          payload: payloadForAi ?? {},
-          generatedForm: text,
-          isTutorialRun,
-        })
-      }
       trackCoachingGenerated(
         authUserId,
         {
           source: 'deterministic',
-          ...generationMeta,
+          mode: payloadForAi?.mode,
+          workspace: payloadForAi?.coachingWorkspace,
         },
         isTutorialRun,
       )
@@ -1276,19 +1077,12 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
         const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
         if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
-      if (authUserId) {
-        await saveCoachingRecord({
-          userId: authUserId,
-          payload: payloadForAi ?? {},
-          generatedForm: text,
-          isTutorialRun,
-        })
-      }
       trackCoachingGenerated(
         authUserId,
         {
           source: 'openai',
-          ...generationMeta,
+          mode: payloadForAi?.mode,
+          workspace: payloadForAi?.coachingWorkspace,
         },
         isTutorialRun,
       )
@@ -1316,19 +1110,12 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
         const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
         if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
-      if (authUserId) {
-        await saveCoachingRecord({
-          userId: authUserId,
-          payload: payloadForAi ?? {},
-          generatedForm: text,
-          isTutorialRun,
-        })
-      }
       trackCoachingGenerated(
         authUserId,
         {
           source: 'openai',
-          ...generationMeta,
+          mode: payloadForAi?.mode,
+          workspace: payloadForAi?.coachingWorkspace,
         },
         isTutorialRun,
       )
@@ -1363,19 +1150,12 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
         const updated = await recordServerSideGenerationUsage(authUserId, authUserEmail)
         if (updated) usageSnapshot = usageEnvelope(updated, authUserEmail)
       }
-      if (authUserId) {
-        await saveCoachingRecord({
-          userId: authUserId,
-          payload: payloadForAi ?? {},
-          generatedForm: text,
-          isTutorialRun,
-        })
-      }
       trackCoachingGenerated(
         authUserId,
         {
           source: 'deterministic',
-          ...generationMeta,
+          mode: payloadForAi?.mode,
+          workspace: payloadForAi?.coachingWorkspace,
           fallbackReason: 'openai_error',
         },
         isTutorialRun,
