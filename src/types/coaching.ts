@@ -10,7 +10,8 @@ export type SimpleCoachingInput = {
   employeeName: string
   /**
    * Main reason / topic. APS / HPA / MPT meanings are fixed server-side for the AI (Attempts Per Shift,
-   * Hours Per Activation, minutes between customer interactions — not transaction length).
+   * HPA = postpaid production efficiency vs hours worked, MPT = transaction/process speed,
+   * APS = engagement/attempt generation).
    */
   coachingReason: string
   /** Supporting context, observations, or numbers (e.g. metric values, dates). */

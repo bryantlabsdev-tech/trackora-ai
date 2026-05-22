@@ -64,7 +64,7 @@ export function polishGeneratedCoachingForm(text, rawEmployeeName) {
     t = t.replace(re, (_, prefix, ch) => prefix + ch.toUpperCase())
   }
 
-  t = t.replace(/([.!?])\s+([a-z])/g, (_, p, ch) => `${p} ${ch.toUpperCase()}`)
+  t = t.replace(/([.!?])[ \t]+([a-z])/g, (_, p, ch) => `${p} ${ch.toUpperCase()}`)
 
   t = t.replace(/\n(•\s+)([a-z])/g, (_, b, ch) => '\n' + b + ch.toUpperCase())
   t = t.replace(/\n(-\s+)([a-z])/g, (_, b, ch) => '\n' + b + ch.toUpperCase())

@@ -66,9 +66,14 @@ export function buildRefineSectionPrompt(payload) {
       ? `Employee name (use naturally): ${payload.employeeName.trim()}\n\n`
       : ''
 
+  const nextStepsContract =
+    payload.mode === 'coaching' && sectionLabel === 'Next Steps'
+      ? '\nHARD REQUIREMENT: Output exactly 5 bullet lines (each starting with • or -). No fewer than 5. Operational floor actions only — no "increase attempts," "monitor APS," or robotic KPI phrasing.\n'
+      : ''
+
   const system = `${modeLine}
 Rewrite ONLY the section body below. Output plain text only — no section header line, no markdown fences, no quotes.
-Preserve "- " bullets when the section uses bullets. Do not invent facts or HR processes.`
+Preserve "- " bullets when the section uses bullets. Do not invent facts or HR processes.${nextStepsContract}`
 
   const user = `${employeeLine}${coachingCtx}SECTION KEY: ${payload.sectionKey || sectionLabel}
 SECTION TITLE: ${payload.sectionTitle || sectionLabel}

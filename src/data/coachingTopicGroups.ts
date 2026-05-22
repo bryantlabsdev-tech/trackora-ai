@@ -30,7 +30,8 @@ const MOBILE_SALES_COACHING_TOPIC_GROUPS: CoachingTopicGroup[] = [
         input: {
           employeeName: 'Mobile Expert',
           coachingReason: 'Low APS (Attempts Per Shift)',
-          notes: 'Add current APS and goal if known. Focus on getting customers to the tablet for eligibility.',
+          notes:
+            'Add current APS if known. Focus on customer engagement and opportunity creation: engaging more customers, slowing down to uncover needs, exploring upgrade and new-line opportunities, fully working interactions, and creating activation opportunities from store traffic.',
         },
       },
       {
@@ -40,7 +41,8 @@ const MOBILE_SALES_COACHING_TOPIC_GROUPS: CoachingTopicGroup[] = [
         input: {
           employeeName: 'Mobile Expert',
           coachingReason: 'High HPA (Hours Per Activation)',
-          notes: 'Add numbers if known. High HPA = too long between postpaid activations.',
+          notes:
+            'Add numbers if known. High HPA = low postpaid production for hours worked; focus on opportunity creation and consistent postpaid conversations.',
         },
       },
       {

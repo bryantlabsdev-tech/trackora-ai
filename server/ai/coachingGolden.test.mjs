@@ -49,6 +49,20 @@ describe('golden mobile expert metric prompt routing', () => {
     assert.ok(result)
     assert.match(result.system, /Severity: Needs Improvement/i)
     assert.match(result.system, /Severity: Slightly Above Goal/i)
+    assert.match(result.system, /Metric separation: HPA = postpaid output pace for hours worked/i)
+  })
+
+  it('routes high HPA toward production and conversion coaching by default', () => {
+    const result = buildCoachingLogMessages(
+      'coaching_log',
+      buildPayload({ notes: 'HPA 8.2 low postpaid production this week' }),
+    )
+    assert.ok(result)
+    assert.match(result.system, /not enough postpaid activations for hours worked/i)
+    assert.match(result.system, /not automatically activation-speed issues/i)
+    assert.doesNotMatch(result.system, /taking too long to complete activations/i)
+    assert.match(result.system, /Vocabulary normalization:/i)
+    assert.match(result.system, /Only discuss activation\/process-speed delays for HPA when notes explicitly describe/i)
   })
 })
 

@@ -6,6 +6,12 @@ import rateLimit from 'express-rate-limit'
 import cors from 'cors'
 import { formatPersonName, polishGeneratedCoachingForm } from '../shared/coachingOutput.mjs'
 import {
+  finalizeCoachingOutput,
+  finalizeNextStepsSectionBody,
+  validateCoachingNextStepsContract,
+} from '../shared/coachingOutputContract.mjs'
+import { countNextStepsBullets } from '../shared/nextStepsNormalizer.mjs'
+import {
   buildCoachingClassRules,
   buildDeterministicCoachingForm,
   classifyIssue,
@@ -353,6 +359,20 @@ async function recordServerSideGenerationUsage(userId, authEmail) {
     remaining,
   })
   return updatedRow
+}
+
+/**
+ * Final coaching post-processing contract:
+ * - name polish
+ * - KPI language guardrails
+ * - realism dialect + human compression
+ * - hard 5-bullet Next Steps enforcement in coaching mode
+ * @param {string} raw
+ * @param {string} rawName
+ * @param {Record<string, unknown>} payloadForAi
+ */
+function finalizeCoachingText(raw, rawName, payloadForAi) {
+  return finalizeCoachingOutput(raw, rawName, payloadForAi)
 }
 
 app.post('/create-checkout-session', async (req, res) => {
@@ -922,7 +942,23 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
         temperature: 0.48,
       })
       const polishedName = formatPersonName(refinePayload.employeeName ?? '')
-      const polished = polishGeneratedCoachingForm(raw.trim(), polishedName)
+      let polished = polishGeneratedCoachingForm(raw.trim(), polishedName)
+      const refinePayloadForGuards = {
+        mode: refinePayload.mode,
+        coachingReason: refinePayload.coachingFor,
+        notes: '',
+        coachingWorkspace: refinePayload.coachingWorkspace,
+        coachingType: refinePayload.coachingType,
+        role: refinePayload.role,
+      }
+      if (refinePayload.mode === 'coaching' && refinePayload.sectionName === 'Next Steps') {
+        polished = finalizeNextStepsSectionBody(polished, refinePayloadForGuards)
+        const wrapped = `Next Steps:\n${polished}\n\nManager Follow-Up:\n`
+        const validation = validateCoachingNextStepsContract(wrapped, refinePayloadForGuards)
+        if (!validation.ok) {
+          polished = finalizeNextStepsSectionBody('', refinePayloadForGuards)
+        }
+      }
 
       if (isProPlan(profile, authUserEmail)) {
         const updatedProfile = await incrementMonthlyRefinementCount(authUserId)
@@ -1009,7 +1045,7 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
   if (!openai) {
     if (action === 'coaching_log') {
       const raw = buildDeterministicCoachingForm(payloadForAi)
-      const text = polishGeneratedCoachingForm(raw, rawName)
+      const text = finalizeCoachingText(raw, rawName, payloadForAi)
       debugLog('[api/ai] coaching_log response', {
         source: 'deterministic',
         usedOpenAI: false,
@@ -1057,7 +1093,22 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
 
     if (action === 'coaching_log' && messages.coachingMeta) {
       const { issuePrimary, userBlob } = messages.coachingMeta
-      let text = polishGeneratedCoachingForm(raw, rawName)
+      let text = finalizeCoachingText(raw, rawName, payloadForAi)
+      if (
+        (payloadForAi?.mode || 'coaching') === 'coaching' &&
+        countNextStepsBullets(text) < 5
+      ) {
+        raw = await callOpenAIChat([
+          ...chatMessages,
+          { role: 'assistant', content: raw },
+          {
+            role: 'user',
+            content:
+              'REVISION REQUIRED: Next Steps must include at least 5 bullet lines (each starting with • or -). Rewrite the full coaching form. Keep all sections. Next Steps bullets must be distinct operational actions — no filler KPI phrases like "increase attempts" or "monitor APS".',
+          },
+        ])
+        text = finalizeCoachingText(raw, rawName, payloadForAi)
+      }
       if (coachingOutputViolatesTopicAnchor(text, issuePrimary, userBlob)) {
         const retryUser = buildTopicRetryUserMessage(issuePrimary, userBlob)
         raw = await callOpenAIChat([
@@ -1065,7 +1116,7 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
           { role: 'assistant', content: raw },
           { role: 'user', content: retryUser },
         ])
-        text = polishGeneratedCoachingForm(raw, rawName)
+        text = finalizeCoachingText(raw, rawName, payloadForAi)
       }
       debugLog('[api/ai] coaching_log response', {
         source: 'openai',
@@ -1098,8 +1149,23 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
       })
     }
 
-    const text =
-      action === 'coaching_log' ? polishGeneratedCoachingForm(raw, rawName) : raw
+    let text = action === 'coaching_log' ? finalizeCoachingText(raw, rawName, payloadForAi) : raw
+    if (
+      action === 'coaching_log' &&
+      (payloadForAi?.mode || 'coaching') === 'coaching' &&
+      countNextStepsBullets(text) < 5
+    ) {
+      raw = await callOpenAIChat([
+        ...chatMessages,
+        { role: 'assistant', content: raw },
+        {
+          role: 'user',
+          content:
+            'REVISION REQUIRED: Next Steps must include at least 5 bullet lines (each starting with • or -). Rewrite the full coaching form with 5 distinct Next Steps bullets.',
+        },
+      ])
+      text = finalizeCoachingText(raw, rawName, payloadForAi)
+    }
     if (action === 'coaching_log') {
       debugLog('[api/ai] coaching_log response', {
         source: 'openai',
@@ -1138,7 +1204,7 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
     }
     if (action === 'coaching_log') {
       const raw = buildDeterministicCoachingForm(payloadForAi)
-      const text = polishGeneratedCoachingForm(raw, rawName)
+      const text = finalizeCoachingText(raw, rawName, payloadForAi)
       debugLog('[api/ai] coaching_log response', {
         source: 'deterministic',
         usedOpenAI: false,

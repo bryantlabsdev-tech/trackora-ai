@@ -47,22 +47,23 @@ export const COACHING_NATURAL_VOICE =
 /** Corrective coaching — natural prose, anchored to user input; topic guide appended per request. */
 export const RETAIL_WIRELESS_METRIC_DEFINITIONS =
   'RETAIL WIRELESS METRICS — use EXACTLY these definitions whenever coachingReason or notes mention APS, HPA, MPT, or performance on the sales floor. Never substitute other industry meanings (e.g. do not treat APS as “accessories per sale” or anything not defined below).\n' +
-  '- APS (Attempts Per Shift): activity/customer-engagement volume — how many real customer attempts the rep creates in a shift. Higher APS is better.\n' +
-  '- HPA (Hours Per Activation): productivity/activation efficiency — hours between successful postpaid activations. Lower HPA is better.\n' +
-  '- MPT (Minutes Per Transaction): transaction speed/process efficiency — minutes per transaction flow. Lower MPT is better.\n' +
+  '- APS (Attempts Per Shift): internal metric only — coach floor behaviors (engage more customers, slow down to uncover needs, fully work interactions, explore upgrade and new-line opportunities, create activation opportunities from traffic). Ports do NOT apply to APS. Do NOT lecture the rep on APS, goals, or “increase attempts.”\n' +
+  '- HPA (Hours Per Activation): postpaid production pace — postpaid output compared to hours worked. Lower HPA is better.\n' +
+  '- MPT (Minutes Per Transaction): transaction pace on the floor — minutes per transaction flow. Lower MPT is better.\n' +
   'BENCHMARKS (do not invert):\n' +
   '- APS goal: 3.5 or higher (APS >= 3.5 = on track; APS < 3.5 = needs coaching).\n' +
   '- HPA goal: 6.0 or lower (HPA <= 6.0 = on track; HPA > 6.0 = needs coaching).\n' +
   '- MPT goal: 45 or lower (MPT <= 45 = on track; MPT > 45 = needs coaching).\n' +
   'INTERPRETATION (only when the user’s input supports it; never invent numbers):\n' +
-  '- Low APS → not enough engagement / not enough genuine attempts to eligibility.\n' +
-  '- High HPA → too long between postpaid wins / productivity-conversion gap.\n' +
+  '- Low APS → missed opportunities from customer interactions: not engaging enough customers, ending conversations too early, weak discovery, or not uncovering upgrade/new-line paths and activation opportunities from traffic.\n' +
+  '- High HPA → not enough postpaid activations for hours worked, usually from weak opportunity creation and low traffic conversion from customer conversations (not automatically activation-speed issues).\n' +
   '- High MPT → transaction flow is too slow / process friction during activations.\n' +
+  '- Separation rule: HPA is postpaid output pace; MPT is transaction pace. Do not treat high HPA as slow activation execution unless notes explicitly mention slow transactions, slow setup, paperwork delays, long customer wait times, or slow operational execution.\n' +
   'COMBINED METRIC INTELLIGENCE (when those combinations appear in user-provided numbers):\n' +
-  '- Low APS + High HPA: low opportunities plus low productivity. Coach customer engagement volume and conversion.\n' +
-  '- High APS + High HPA: activity exists but conversion efficiency is weak. Coach discovery, qualification, objection handling, and closing.\n' +
+  '- Low APS + High HPA: low opportunities plus low postpaid output. Coach customer engagement, discovery, fully working conversations, and urgency — not generic customer-service improvement or tablet/tool coaching.\n' +
+  '- High APS + High HPA: activity exists but too few conversations are turning into postpaid activations. Coach discovery, objections, and postpaid presentations.\n' +
   '- Good APS + High MPT: opportunities exist but transaction speed is slow. Coach process flow, system confidence, and preparation.\n' +
-  '- Low APS + Good HPA: conversion can work when engaged, but volume is low. Coach attempt volume while maintaining quality.\n' +
+  '- Low APS + Good HPA: conversion can work when engaged, but opportunity volume is low. Coach engaging more customers, stronger discovery, and fully working each interaction without stopping at the first no.\n' +
   'Only use APS, HPA, and MPT values that appear in the JSON. Never guess labels, goals, or KPIs.\n\n'
 
 export const COACHING_SCENARIO_VS_METRICS =
@@ -91,13 +92,22 @@ export const COACHING_STRUCTURE_AND_TONE =
 export const MOBILE_EXPERT_METRIC_COACHING_UPGRADE =
   'MOBILE EXPERT WIRELESS SALES UPGRADE (apply only for Mobile Expert metric/performance topics):\n' +
   '- Sound like a real wireless Team Lead on the floor, not HR. Keep it direct, fair, and human.\n' +
-  '- Use practical floor language when it fits the user input: get customers to the tablet, eligibility checks, customer attempts, action alley, electronics traffic, discovery questions, postpaid conversations, prepaid to postpaid transition, accessory attachment, activation flow, reset quickly between customers, peak traffic windows, floor presence, customer engagement, conversion, urgency.\n' +
+  '- Use practical floor language when it fits the user input: get customers to the tablet, eligibility checks, customer attempts, action alley, electronics traffic, discovery questions, postpaid conversations, prepaid to postpaid transition, accessory attachment, transaction pace, reset quickly between customers, peak traffic windows, floor presence, customer engagement, traffic conversion, urgency.\n' +
   '- Avoid robotic/corporate filler: "improve performance", "work harder", "be more productive", "maintain standards", "customer service excellence".\n' +
   '- Do NOT mention "AI".\n' +
   '- Do NOT mention "OSL" unless the user input or context already includes OSL.\n' +
   '- Use metric severity to tune tone: do not overreact for slight misses; be firmer for critical misses.\n' +
-  '- If metrics are provided, Situation must include metric value + goal + plain-language meaning.\n' +
+  '- APS default coaching: energetic, sales-opportunity coaching — work more opportunities from traffic, engage customers consistently, run all carrier options, slow down enough to uncover needs, and do not end interactions early. Sound like an experienced TL on the floor, not KPI analysis.\n' +
+  '- APS wording guardrail: HARD-BAN — "ports," "port opportunities," "port activations," "goal is 3.5," "APS target," "increase attempts," "improve APS," "checking carrier eligibility," "all available carriers," "maximize traffic," "maximize attempts," "monitor APS," "customer traffic opportunities," "APS goal," "hit 3.5 APS," "target APS," "carrier eligibility," "check eligibility," "your APS is low," "current metrics show." Use TL language: engage more customers, slow down to uncover upgrade and new-line opportunities, fully work each interaction, create activation opportunities from traffic, ask stronger discovery questions.\n' +
+  '- APS Next Steps (coaching mode): exactly 5 bullets — e.g. engage more customers throughout the day; slow down conversations to uncover customer needs; explore upgrade and new-line opportunities consistently; fully work each customer interaction before moving on; ask stronger discovery questions to create activation opportunities.\n' +
+  '- APS Next Steps HARD RULE (coaching mode): exactly 5 bullet lines in Next Steps — validation will fail or auto-expand if fewer than 5.\n' +
+  '- HPA default coaching: focus on postpaid opportunity creation, discovery quality, carrier pitching, traffic conversion, urgency, and traffic utilization.\n' +
+  '- Only discuss activation/process-speed delays for HPA when notes explicitly describe slow transactions/setup/paperwork/wait times/operational execution (otherwise keep speed coaching tied to MPT).\n' +
+  '- HPA wording guardrail: avoid phrases like "time between activations," "taking too long between activations," "reduce time between activations," "activation timing," "activation flow," "streamline activations," "workflow efficiency," "process optimization," "qualifying customers/leads," "closing techniques/sales," and "transaction speed" unless the user explicitly described slow setup/process or clear MPT overlap; default to postpaid productivity language tied to engagement, urgency, opportunity creation, and traffic conversion.\n' +
+  '- Vocabulary normalization: avoid consultant/SaaS language such as "lead qualification," "workflow optimization," "streamline operations," "optimize process," and "productivity efficiency." Replace with frontline terms: customer engagement, traffic, opportunities, upgrades, ports, new lines, discovery questions, postpaid conversations, carrier options, urgency, floor behavior, passive behavior, downtime, momentum, ownership, consistency.\n' +
+  '- If metrics are provided, Situation may include value + goal for HPA/MPT. For APS-only coaching, Situation must focus on missed customer opportunities — do NOT repeat APS value, goal 3.5, or "your APS is low."\n' +
   '- Next Steps must be measurable and include a realistic 7-day action plan.\n' +
+  '- Next Steps should usually be 4-5 short frontline bullets (not 2-3), with natural variation in wording/length so it reads manager-written, not templated.\n' +
   '- Manager Follow-Up should usually land in 3-7 days for metric coaching.\n\n'
 
 /** Appended only for Mobile Expert recognition topics with wireless metrics. */
@@ -130,7 +140,7 @@ export const COACHING_PROMPT =
   '- Exact section titles and order below. Plain text, paste-ready. No ## markdown or bold titles.\n\n' +
   'LENGTH:\n' +
   '- Default: ONE tight sentence per section when possible (two only if truly needed). Behavior often one sentence.\n' +
-  '- Next Steps: 2–3 very short bullets (a few words each is fine).\n' +
+  '- Next Steps: usually 4–5 short, practical bullets with slightly varied wording length.\n' +
   '- Overall output ~35–40% shorter than a typical formal write-up—trim relentlessly.\n\n' +
   'NUMBERS / KPIs:\n' +
   '- If the user gave numbers, use them directly and specifically (example shape: "You recorded X while goal was Y").\n' +
@@ -221,7 +231,7 @@ export const GENERAL_COACHING_PROMPT =
   '- Exact section titles and order below. Plain text, paste-ready. No ## markdown or bold titles.\n\n' +
   'LENGTH:\n' +
   '- Default: ONE tight sentence per section when possible (two only if truly needed). Behavior often one sentence.\n' +
-  '- Next Steps: 2–3 very short bullets (a few words each is fine).\n' +
+  '- Next Steps: usually 4–5 short, practical bullets with slightly varied wording length.\n' +
   '- Overall output ~35–40% shorter than a typical formal write-up—trim relentlessly.\n\n' +
   'NUMBERS / TARGETS:\n' +
   '- If the user gave numbers, use them directly and specifically.\n' +

@@ -4,6 +4,7 @@ import {
   buildCoachingClassRules,
   buildDeterministicCoachingForm,
   classifyIssue,
+  classifyIssueWithConfidence,
   leakTestForbiddenTerms,
 } from './coachingIssueClassifier.mjs'
 
@@ -29,6 +30,25 @@ describe('classifyIssue', () => {
 
   test('Late returning from lunch → attendance', () => {
     assert.equal(classifyIssue('Late returning from lunch', 'coaching').primary, 'attendance')
+  })
+
+  test('High HPA text routes to performance_sales', () => {
+    assert.equal(
+      classifyIssue('HPA 7.8 with low postpaid output for hours worked', 'coaching').primary,
+      'performance_sales',
+    )
+  })
+
+  test('Productivity text avoids attendance leakage', () => {
+    assert.equal(classifyIssue('Productivity expectations each shift', 'coaching').primary, 'unspecified')
+  })
+})
+
+describe('classifyIssueWithConfidence', () => {
+  test('returns low-confidence unspecified for ambiguous workplace behavior text', () => {
+    const out = classifyIssueWithConfidence('Workplace communication and teamwork updates were unclear', 'coaching')
+    assert.equal(out.primary, 'unspecified')
+    assert.ok(out.confidence >= 0)
   })
 })
 
@@ -92,6 +112,53 @@ describe('grounded deterministic form (no cross-category leakage)', () => {
       'consistent rhythm on the floor',
       'monitor this lightly',
     ])
+  })
+
+  test('high HPA deterministic coaching stays opportunity/conversion focused by default', () => {
+    const text = buildDeterministicCoachingForm({
+      employeeName: 'Alex',
+      coachingWorkspace: 'mobile_sales',
+      coachingType: 'mobile_expert',
+      role: 'ME',
+      coachingReason: 'HPA 8.2 low postpaid production',
+      notes: 'Not enough postpaid opportunities created each shift',
+      mode: 'coaching',
+    })
+    assert.match(text, /postpaid/i)
+    assert.match(text, /activations for hours worked|carrier options|discovery|conversion|opportunit/i)
+    assertTextExcludesAll(text, [
+      'slow setup',
+      'paperwork delays',
+      'long customer wait times',
+      'taking too long during the activation process',
+      'lead qualification',
+      'workflow optimization',
+      'streamline operations',
+      'process efficiency',
+      'improving conversion habits',
+      'streamline your process',
+      'between postpaid activations',
+      'activation flow',
+      'closing sales',
+    ])
+    const nextStepsMatch = text.match(/Next Steps:\n([\s\S]*?)\n\nManager Follow-Up:/)
+    assert.ok(nextStepsMatch, 'Expected Next Steps section')
+    const bulletCount = (nextStepsMatch?.[1].match(/^• /gm) || []).length
+    assert.ok(bulletCount >= 4 && bulletCount <= 5, `Expected 4-5 bullets, got ${bulletCount}`)
+  })
+
+  test('single APS metric uses opportunity-creation category flavor', () => {
+    const text = buildDeterministicCoachingForm({
+      employeeName: 'Alex',
+      coachingWorkspace: 'mobile_sales',
+      coachingType: 'mobile_expert',
+      role: 'ME',
+      coachingReason: 'APS 2.4 below target',
+      notes: 'Low customer engagement in electronics traffic',
+      mode: 'coaching',
+    })
+    assert.match(text, /Customer Engagement & Opportunity Creation/i)
+    assert.doesNotMatch(text, /goal is 3\.5|vs >= 3\.5|increase attempts|\bport\b|\bports\b|port opportunities/i)
   })
 })
 
