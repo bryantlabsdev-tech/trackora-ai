@@ -17,6 +17,46 @@ import { isDuplicateStripeEvent } from './webhookIdempotency.mjs'
 export async function handleStripeWebhookEvent(event, res, deps) {
   const { stripe, respondStripeWebhookSync } = deps
 
+  /**
+   * @param {string | null} customerId
+   * @param {string | null} fallbackEmail
+   * @returns {Promise<string | null>}
+   */
+  async function resolveCustomerEmail(customerId, fallbackEmail = null) {
+    const fallback = typeof fallbackEmail === 'string' && fallbackEmail.trim() ? fallbackEmail.trim() : null
+    if (fallback) return fallback
+    if (!customerId) return null
+    try {
+      const customer = await stripe.customers.retrieve(customerId)
+      if (customer && !('deleted' in customer) && typeof customer.email === 'string' && customer.email.trim()) {
+        return customer.email.trim()
+      }
+    } catch (err) {
+      const msg = typeof err?.message === 'string' ? err.message : 'unknown error'
+      console.warn('[webhook/stripe] could not resolve customer email', { customerId, message: msg })
+    }
+    return null
+  }
+
+  /**
+   * @param {string} eventType
+   * @param {import('stripe').Stripe.Subscription} subscription
+   * @param {string | null} metadataUserId
+   * @param {string | null} hintEmail
+   */
+  async function syncFromSubscription(eventType, subscription, metadataUserId, hintEmail = null) {
+    const customerId = pickStripeId(subscription.customer)
+    const customerEmail = await resolveCustomerEmail(customerId, hintEmail)
+    const result = await syncSubscriptionToUser({
+      eventType,
+      customerId,
+      customerEmail,
+      subscription,
+      metadataUserId,
+    })
+    return respondStripeWebhookSync(res, eventType, result)
+  }
+
   if (isDuplicateStripeEvent(event.id)) {
     console.log('[webhook/stripe] duplicate event id skipped', event.id, event.type)
     return res.status(200).json({ received: true, duplicate: true })
@@ -45,21 +85,19 @@ export async function handleStripeWebhookEvent(event, res, deps) {
         console.warn('[webhook/stripe] checkout session mode is not subscription:', session.mode)
       }
 
-      if (!customerId || !subscriptionId) {
+      if (!subscriptionId) {
         console.error(
-          '[webhook/stripe] checkout.session.completed missing customer or subscription id; skipping sync',
+          '[webhook/stripe] checkout.session.completed missing subscription id; skipping sync',
         )
-        return res.status(200).json({ received: true, skipped: 'missing_customer_or_subscription' })
+        return res.status(200).json({ received: true, skipped: 'missing_subscription' })
       }
 
       const subscription = await stripe.subscriptions.retrieve(subscriptionId)
-      const result = await syncSubscriptionToUser({
-        eventType: event.type,
-        customerId,
-        subscription,
-        metadataUserId,
-      })
-      return respondStripeWebhookSync(res, event.type, result)
+      const customerEmail =
+        session.customer_details && typeof session.customer_details.email === 'string'
+          ? session.customer_details.email
+          : null
+      return syncFromSubscription(event.type, subscription, metadataUserId, customerEmail)
     }
 
     if (
@@ -68,15 +106,10 @@ export async function handleStripeWebhookEvent(event, res, deps) {
       event.type === 'customer.subscription.deleted'
     ) {
       const subscription = event.data.object
-      const customerId = pickStripeId(subscription.customer)
       const metadataUserId =
         subscription.metadata && typeof subscription.metadata.userId === 'string'
           ? subscription.metadata.userId
           : null
-      if (!customerId) {
-        console.error('[webhook/stripe] subscription event missing customer id', event.type)
-        return res.status(200).json({ received: true, skipped: 'missing_customer_id' })
-      }
 
       if (event.type === 'customer.subscription.deleted') {
         console.log('[webhook/stripe] subscription deleted / ended', {
@@ -91,13 +124,7 @@ export async function handleStripeWebhookEvent(event, res, deps) {
         })
       }
 
-      const result = await syncSubscriptionToUser({
-        eventType: event.type,
-        customerId,
-        subscription,
-        metadataUserId,
-      })
-      return respondStripeWebhookSync(res, event.type, result)
+      return syncFromSubscription(event.type, subscription, metadataUserId)
     }
 
     if (
@@ -108,6 +135,10 @@ export async function handleStripeWebhookEvent(event, res, deps) {
       const invoice = event.data.object
       const customerId = pickStripeId(invoice.customer)
       const subscriptionId = pickStripeId(invoice.subscription)
+      const invoiceEmail =
+        typeof invoice.customer_email === 'string' && invoice.customer_email.trim()
+          ? invoice.customer_email.trim()
+          : null
       const billingReason = typeof invoice.billing_reason === 'string' ? invoice.billing_reason : null
 
       const isPaidEvent = event.type === 'invoice.paid' || event.type === 'invoice.payment_succeeded'
@@ -127,22 +158,41 @@ export async function handleStripeWebhookEvent(event, res, deps) {
         })
       }
 
-      if (!customerId || !subscriptionId) {
-        console.error('[webhook/stripe] invoice event missing customer or subscription id')
-        return res.status(200).json({ received: true, skipped: 'missing_customer_or_subscription' })
+      let resolvedSubscriptionId = subscriptionId
+      if (!resolvedSubscriptionId && customerId) {
+        try {
+          const list = await stripe.subscriptions.list({
+            customer: customerId,
+            status: 'all',
+            limit: 10,
+          })
+          const preferred = ['active', 'trialing', 'past_due', 'unpaid', 'canceled', 'incomplete_expired', 'incomplete']
+          for (const status of preferred) {
+            const hit = list.data.find((s) => s.status === status)
+            if (hit?.id) {
+              resolvedSubscriptionId = hit.id
+              break
+            }
+          }
+        } catch (err) {
+          const msg = typeof err?.message === 'string' ? err.message : 'unknown error'
+          console.error('[webhook/stripe] invoice fallback subscription list failed', {
+            customerId,
+            message: msg,
+          })
+        }
+      }
+      if (!resolvedSubscriptionId) {
+        console.error('[webhook/stripe] invoice event missing subscription id after fallback lookup')
+        return res.status(200).json({ received: true, skipped: 'missing_subscription' })
       }
 
-      const subscription = await stripe.subscriptions.retrieve(subscriptionId)
-      const result = await syncSubscriptionToUser({
-        eventType: event.type,
-        customerId,
-        subscription,
-        metadataUserId:
-          subscription.metadata && typeof subscription.metadata.userId === 'string'
-            ? subscription.metadata.userId
-            : null,
-      })
-      return respondStripeWebhookSync(res, event.type, result)
+      const subscription = await stripe.subscriptions.retrieve(resolvedSubscriptionId)
+      const metadataUserId =
+        subscription.metadata && typeof subscription.metadata.userId === 'string'
+          ? subscription.metadata.userId
+          : null
+      return syncFromSubscription(event.type, subscription, metadataUserId, invoiceEmail)
     }
   } catch (err) {
     const message = typeof err?.message === 'string' ? err.message : 'webhook handling failed'

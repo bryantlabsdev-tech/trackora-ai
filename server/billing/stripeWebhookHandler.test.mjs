@@ -65,4 +65,48 @@ describe('handleStripeWebhookEvent', () => {
     )
     assert.equal(res.state.body?.unhandled, 'account.updated')
   })
+
+  it('falls back to customer subscription lookup for invoice.payment_failed without subscription id', async () => {
+    const res = mockRes()
+    /** @type {string[]} */
+    const calls = []
+    const deps = {
+      stripe: {
+        customers: {
+          retrieve: async () => ({ id: 'cus_1', email: 'test@example.com' }),
+        },
+        subscriptions: {
+          list: async () => {
+            calls.push('list')
+            return { data: [{ id: 'sub_fallback', status: 'past_due', customer: 'cus_1', metadata: {} }] }
+          },
+          retrieve: async (id) => {
+            calls.push(`retrieve:${id}`)
+            return { id, customer: 'cus_1', status: 'past_due', metadata: {}, items: { data: [] } }
+          },
+        },
+      },
+      respondStripeWebhookSync: (r, eventType, result) => r.status(200).json({ received: true, eventType, result }),
+    }
+    const event = {
+      id: 'evt_invoice_missing_sub',
+      type: 'invoice.payment_failed',
+      data: {
+        object: {
+          id: 'in_1',
+          customer: 'cus_1',
+          subscription: null,
+          billing_reason: 'subscription_cycle',
+          customer_email: 'test@example.com',
+        },
+      },
+    }
+
+    await handleStripeWebhookEvent(event, res, deps)
+
+    assert.equal(res.state.statusCode, 200)
+    assert.equal(res.state.body?.received, true)
+    assert.equal(calls.includes('list'), true)
+    assert.equal(calls.includes('retrieve:sub_fallback'), true)
+  })
 })

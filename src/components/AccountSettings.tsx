@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useProfile } from '../context/ProfileContext'
 import { startEliteUpgrade } from '../api/startEliteUpgrade'
+import { listCoachingRecords, updateCoachingRecord } from '../api/coachingRecords'
+import { requestRoiInsights, type RoiInsights } from '../api/requestRoiInsights'
 import { getCreateBillingPortalSessionUrl, getCreateCheckoutSessionUrl } from '../lib/apiBase'
 import { supabase } from '../lib/supabase'
 import { persistCoachingWorkspace } from '../lib/profileApi'
@@ -15,12 +17,39 @@ import {
   isOwnerFreePro,
 } from '../types/profile'
 import PrivacyPolicyContent from './PrivacyPolicyContent'
+import type { CoachingRecord, CoachingRecordStatus } from '../types/coachingRecord'
 
 type AccountSettingsProps = {
   userId: string
   email: string | null
   onGoToCoaching: () => void
   onSignOut: () => Promise<void>
+}
+
+function formatMovement(
+  movement: { before: number; latest: number; delta: number } | null,
+  higherIsBetter: boolean,
+): string {
+  if (!movement) return 'No baseline yet'
+  const direction =
+    movement.delta === 0
+      ? 'flat'
+      : higherIsBetter
+        ? movement.delta > 0
+          ? 'improving'
+          : 'declining'
+        : movement.delta < 0
+          ? 'improving'
+          : 'declining'
+  const deltaLabel = movement.delta > 0 ? `+${movement.delta}` : `${movement.delta}`
+  return `${movement.before} -> ${movement.latest} (${deltaLabel}, ${direction})`
+}
+
+function formatDateLabel(iso: string | null): string {
+  if (!iso) return 'Not set'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return 'Not set'
+  return d.toLocaleDateString()
 }
 
 export default function AccountSettings({ userId, email, onGoToCoaching, onSignOut }: AccountSettingsProps) {
@@ -38,6 +67,14 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const [privacyModalOpen, setPrivacyModalOpen] = useState(false)
+  const [roiLoading, setRoiLoading] = useState(false)
+  const [roiError, setRoiError] = useState<string | null>(null)
+  const [roiData, setRoiData] = useState<RoiInsights | null>(null)
+  const [roiHasData, setRoiHasData] = useState(false)
+  const [recordLoading, setRecordLoading] = useState(false)
+  const [recordError, setRecordError] = useState<string | null>(null)
+  const [records, setRecords] = useState<CoachingRecord[]>([])
+  const [recordUpdatingId, setRecordUpdatingId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!privacyModalOpen) return
@@ -52,6 +89,54 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [privacyModalOpen])
+
+  useEffect(() => {
+    if (!profile || loading) return
+    let cancelled = false
+    setRoiLoading(true)
+    setRoiError(null)
+    void requestRoiInsights()
+      .then((result) => {
+        if (cancelled) return
+        if (!result.ok) {
+          setRoiError(result.error)
+          setRoiData(null)
+          setRoiHasData(false)
+          return
+        }
+        setRoiData(result.data)
+        setRoiHasData(result.hasData)
+      })
+      .finally(() => {
+        if (!cancelled) setRoiLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [profile?.id, loading])
+
+  useEffect(() => {
+    if (!profile || loading) return
+    let cancelled = false
+    setRecordLoading(true)
+    setRecordError(null)
+    void listCoachingRecords(25)
+      .then((result) => {
+        if (cancelled) return
+        if (!result.ok) {
+          setRecordError(result.error)
+          setRecords([])
+          return
+        }
+        setRecords(result.records)
+      })
+      .finally(() => {
+        if (!cancelled) setRecordLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [profile?.id, loading, roiData?.formsGenerated])
 
   const planLabel = profile ? getPlanDisplayLabel(profile, email ?? profile.email) : 'Free'
   const planPillClass =
@@ -91,6 +176,20 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
   }, [profile?.current_period_end])
   const cancelAtPeriodEndLikely =
     profile?.subscription_status === 'canceled' && Boolean(profile?.current_period_end)
+  const roiDevSample = useMemo(() => {
+    if (!import.meta.env.DEV || roiHasData) return null
+    return {
+      formsGenerated: 12,
+      coachingCompletionRate: 58,
+      repsNeedingFollowUp: 3,
+      mostCoachedMetric: 'hpa',
+      beforeAfter: {
+        aps: { before: 2.4, latest: 3.1, delta: 0.7 },
+        hpa: { before: 8.1, latest: 6.9, delta: -1.2 },
+        mpt: { before: 55, latest: 48, delta: -7 },
+      },
+    }
+  }, [roiHasData])
 
   async function handleUpgrade(planTier: 'pro' | 'elite' = 'pro') {
     const trimmedUserId = userId.trim()
@@ -260,6 +359,27 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
       setPasswordInfo('Password reset email sent. Check your inbox.')
     } finally {
       setPasswordLoading(false)
+    }
+  }
+
+  async function handleRecordStatusChange(
+    recordId: string,
+    updates: { status?: CoachingRecordStatus; markFollowUpCompleted?: boolean },
+  ) {
+    setRecordError(null)
+    setRecordUpdatingId(recordId)
+    try {
+      const result = await updateCoachingRecord(recordId, updates)
+      if (!result.ok) {
+        setRecordError(result.error)
+        return
+      }
+      setRecords((prev) => prev.map((r) => (r.id === recordId ? result.record : r)))
+      if (updates.markFollowUpCompleted) {
+        await refresh()
+      }
+    } finally {
+      setRecordUpdatingId(null)
     }
   }
 
@@ -437,6 +557,149 @@ export default function AccountSettings({ userId, email, onGoToCoaching, onSignO
               {checkoutError && <p className="settings-error">{checkoutError}</p>}
             </div>
           )}
+        </article>
+
+        <article className="card settings-card">
+          <h2 className="card-title settings-section-title">Manager ROI Snapshot</h2>
+          <p className="settings-section-lead">
+            Track coaching output volume, metric movement, and follow-up needs.
+          </p>
+          {roiLoading && (
+            <p className="settings-empty-state" role="status">
+              Loading ROI insights…
+            </p>
+          )}
+          {!roiLoading && roiError && <p className="settings-error">{roiError}</p>}
+          {!roiLoading && !roiError && !roiHasData && !roiDevSample && (
+            <p className="settings-empty-state">
+              No coaching history yet. Generate coaching forms to unlock APS/HPA/MPT trend insights.
+            </p>
+          )}
+          {!roiLoading && !roiError && (roiHasData || roiDevSample) && (
+            <>
+              {roiDevSample && !roiHasData && (
+                <p className="settings-inline-status">Dev preview mode: sample-safe placeholders shown.</p>
+              )}
+              <ul className="settings-stat-list" aria-label="ROI summary">
+                <li>
+                  <span className="settings-stat-label">Forms generated</span>
+                  <span className="settings-stat-value">
+                    {roiData?.formsGenerated ?? roiDevSample?.formsGenerated ?? 0}
+                  </span>
+                </li>
+                <li>
+                  <span className="settings-stat-label">Coaching completion rate</span>
+                  <span className="settings-stat-value">
+                    {(() => {
+                      const rate = roiData?.coachingCompletionRate ?? roiDevSample?.coachingCompletionRate ?? null
+                      return rate == null ? 'Not enough follow-up data' : `${rate}%`
+                    })()}
+                  </span>
+                </li>
+                <li>
+                  <span className="settings-stat-label">Reps needing follow-up</span>
+                  <span className="settings-stat-value">
+                    {roiData?.repsNeedingFollowUp ?? roiDevSample?.repsNeedingFollowUp ?? 0}
+                  </span>
+                </li>
+                <li>
+                  <span className="settings-stat-label">Most coached metric</span>
+                  <span className="settings-stat-value">
+                    {(roiData?.mostCoachedMetric ?? roiDevSample?.mostCoachedMetric ?? 'n/a').toUpperCase()}
+                  </span>
+                </li>
+              </ul>
+              <ul className="settings-stat-list" aria-label="Before after metric movement">
+                <li>
+                  <span className="settings-stat-label">APS movement</span>
+                  <span className="settings-stat-value settings-stat-value--muted">
+                    {formatMovement(roiData?.beforeAfter.aps ?? roiDevSample?.beforeAfter.aps ?? null, true)}
+                  </span>
+                </li>
+                <li>
+                  <span className="settings-stat-label">HPA movement</span>
+                  <span className="settings-stat-value settings-stat-value--muted">
+                    {formatMovement(roiData?.beforeAfter.hpa ?? roiDevSample?.beforeAfter.hpa ?? null, false)}
+                  </span>
+                </li>
+                <li>
+                  <span className="settings-stat-label">MPT movement</span>
+                  <span className="settings-stat-value settings-stat-value--muted">
+                    {formatMovement(roiData?.beforeAfter.mpt ?? roiDevSample?.beforeAfter.mpt ?? null, false)}
+                  </span>
+                </li>
+              </ul>
+            </>
+          )}
+        </article>
+
+        <article className="card settings-card">
+          <h2 className="card-title settings-section-title">Coaching History</h2>
+          <p className="settings-section-lead">
+            Saved generated forms with follow-up workflow status (default follow-up due in 3-7 days).
+          </p>
+          {recordLoading && (
+            <p className="settings-empty-state" role="status">
+              Loading coaching history…
+            </p>
+          )}
+          {!recordLoading && records.length === 0 && (
+            <p className="settings-empty-state">No saved coaching records yet. Generate a form to start history.</p>
+          )}
+          {!recordLoading &&
+            records.slice(0, 10).map((record) => (
+              <div key={record.id} className="settings-stack-block">
+                <dl className="settings-dl settings-dl--compact">
+                  <div className="settings-dl-row">
+                    <dt className="settings-dl-term">Rep</dt>
+                    <dd className="settings-dl-def">{record.employee_name || 'Unnamed'}</dd>
+                  </div>
+                  <div className="settings-dl-row">
+                    <dt className="settings-dl-term">Topic</dt>
+                    <dd className="settings-dl-def">{record.coaching_reason || '—'}</dd>
+                  </div>
+                  <div className="settings-dl-row">
+                    <dt className="settings-dl-term">Status</dt>
+                    <dd className="settings-dl-def">{record.status}</dd>
+                  </div>
+                  <div className="settings-dl-row">
+                    <dt className="settings-dl-term">Follow-up due</dt>
+                    <dd className="settings-dl-def">{formatDateLabel(record.follow_up_due_at)}</dd>
+                  </div>
+                  <div className="settings-dl-row">
+                    <dt className="settings-dl-term">Created</dt>
+                    <dd className="settings-dl-def">{formatDateLabel(record.created_at)}</dd>
+                  </div>
+                </dl>
+                <div className="settings-upgrade-grid">
+                  <button
+                    type="button"
+                    className="btn-secondary settings-btn"
+                    disabled={recordUpdatingId === record.id}
+                    onClick={() => void handleRecordStatusChange(record.id, { status: 'Shared' })}
+                  >
+                    Mark Shared
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary settings-btn"
+                    disabled={recordUpdatingId === record.id}
+                    onClick={() => void handleRecordStatusChange(record.id, { status: 'Follow-up Needed' })}
+                  >
+                    Needs Follow-up
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary settings-btn"
+                    disabled={recordUpdatingId === record.id}
+                    onClick={() => void handleRecordStatusChange(record.id, { markFollowUpCompleted: true })}
+                  >
+                    Complete Follow-up
+                  </button>
+                </div>
+              </div>
+            ))}
+          {recordError && <p className="settings-error">{recordError}</p>}
         </article>
 
         <article className="card settings-card">

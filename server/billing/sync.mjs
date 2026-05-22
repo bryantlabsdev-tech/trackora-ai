@@ -18,7 +18,7 @@ export function pickStripeId(value) {
 }
 
 /**
- * @param {string} customerId
+ * @param {string | null} customerId
  * @param {string | null} subscriptionId
  * @param {string | null} metadataUserId
  * @returns {Promise<string | null>}
@@ -41,40 +41,52 @@ export async function resolveProfileIdForBilling(customerId, subscriptionId, met
     }
   }
 
-  const { data: byCustomer, error: byCustomerError } = await supabaseAdmin
-    .from('profiles')
-    .select('id')
-    .eq('stripe_customer_id', customerId)
-    .maybeSingle()
-  if (byCustomerError) {
-    console.error('[billing-sync] profile lookup by customer failed:', byCustomerError.message)
-    return null
+  if (customerId) {
+    const { data: byCustomer, error: byCustomerError } = await supabaseAdmin
+      .from('profiles')
+      .select('id')
+      .eq('stripe_customer_id', customerId)
+      .maybeSingle()
+    if (byCustomerError) {
+      console.error('[billing-sync] profile lookup by customer failed:', byCustomerError.message)
+      return null
+    }
+    if (byCustomer?.id) return String(byCustomer.id)
   }
-  return byCustomer?.id ? String(byCustomer.id) : null
+  return null
 }
 
 /**
  * @param {{
  *   eventType: string
- *   customerId: string
+ *   customerId: string | null
+ *   customerEmail?: string | null
  *   subscription: Stripe.Subscription
  *   metadataUserId: string | null
  * }} params
  */
 export async function syncSubscriptionToUser(params) {
-  const { eventType, customerId, subscription, metadataUserId } = params
+  const { eventType, customerId, customerEmail = null, subscription, metadataUserId } = params
   const subscriptionId = pickStripeId(subscription.id)
   const profileId = await resolveProfileIdForBilling(customerId, subscriptionId, metadataUserId)
   const access = evaluateSubscriptionAccess(subscription)
+  const normalizedStatus = String(access.subscriptionStatus ?? '').toLowerCase()
+  const isDowngradeStatus =
+    normalizedStatus === 'past_due' ||
+    normalizedStatus === 'unpaid' ||
+    normalizedStatus === 'canceled' ||
+    normalizedStatus === 'incomplete_expired'
 
   console.log('[billing-sync] event:', eventType)
-  console.log('[billing-sync] customer id:', customerId)
+  console.log('[billing-sync] customer id:', customerId ?? '(missing)')
+  console.log('[billing-sync] customer email:', customerEmail ?? '(missing)')
   console.log('[billing-sync] subscription id:', subscriptionId ?? '(none)')
   console.log('[billing-sync] profile id:', profileId ?? '(unresolved)')
   console.log('[billing-sync] decision:', {
     is_pro: access.isPro,
     reason: access.reason,
     subscription_status: access.subscriptionStatus,
+    downgrade_status: isDowngradeStatus,
     current_period_end: access.currentPeriodEndIso,
     cancel_at_period_end: Boolean(subscription.cancel_at_period_end),
   })
@@ -92,10 +104,12 @@ export async function syncSubscriptionToUser(params) {
   const updatePayload = {
     is_pro: access.isPro,
     plan_tier: planTier,
-    stripe_customer_id: customerId,
     stripe_subscription_id: subscriptionId,
     subscription_status: access.subscriptionStatus,
     current_period_end: access.currentPeriodEndIso,
+  }
+  if (customerId) {
+    updatePayload.stripe_customer_id = customerId
   }
 
   const { data, error } = await supabaseAdmin
