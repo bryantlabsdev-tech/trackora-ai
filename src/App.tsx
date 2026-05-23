@@ -2,6 +2,8 @@ import { Capacitor } from '@capacitor/core'
 import { useLayoutEffect, useState } from 'react'
 import { useAuthSession } from './hooks/useAuthSession'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
+import { readAuthReturnPath } from './lib/adConversionLinks'
+import { consumeSignupPending, trackSignupCompletedFromSession } from './lib/landingAnalytics'
 import { normalizeAppRoute, useBrowserPath } from './hooks/useBrowserPath'
 import CoachingApp from './CoachingApp'
 import AccountSettings from './components/AccountSettings'
@@ -45,6 +47,13 @@ export default function App() {
   const [view, setView] = useState<'coaching' | 'settings'>('coaching')
   const { pathname, replace } = useBrowserPath()
   const route = normalizeAppRoute(pathname)
+
+  useLayoutEffect(() => {
+    if (loading) return
+    if (session && consumeSignupPending()) {
+      trackSignupCompletedFromSession()
+    }
+  }, [loading, session])
 
   useLayoutEffect(() => {
     if (loading) return
@@ -117,10 +126,10 @@ export default function App() {
       return <AdsLandingPage />
     }
     if (route === 'login') {
-      return <AuthScreen client={client} defaultMode="signin" onBack={() => replace('/')} />
+      return <AuthScreen client={client} defaultMode="signin" onBack={() => replace(readAuthReturnPath())} />
     }
     if (route === 'signup') {
-      return <AuthScreen client={client} defaultMode="signup" onBack={() => replace('/')} />
+      return <AuthScreen client={client} defaultMode="signup" onBack={() => replace(readAuthReturnPath())} />
     }
     return (
       <div className="auth-screen">

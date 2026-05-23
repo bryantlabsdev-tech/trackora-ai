@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import appIcon from '../assets/app-icon.png'
+import { markSignupPending, trackLoginSuccess, trackSignUpSuccess } from '../lib/landingAnalytics'
 import '../auth.css'
 
 type Mode = 'signin' | 'signup'
@@ -82,6 +83,8 @@ export default function AuthScreen({ client, defaultMode = 'signin', onBack }: P
           setError(formatAuthErrorMessage(err.message))
           return
         }
+        markSignupPending()
+        trackSignUpSuccess('email')
         setInfo('Check your email to confirm your account if required by your project settings.')
       } else {
         const { error: err } = await client.auth.signInWithPassword({ email: em, password })
@@ -89,6 +92,7 @@ export default function AuthScreen({ client, defaultMode = 'signin', onBack }: P
           setError(formatAuthErrorMessage(err.message))
           return
         }
+        trackLoginSuccess('email')
       }
     } finally {
       setLoading(false)
