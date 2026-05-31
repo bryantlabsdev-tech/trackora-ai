@@ -1,7 +1,12 @@
 import { Capacitor } from '@capacitor/core'
 import { useLayoutEffect, useState } from 'react'
 import { useAuthSession } from './hooks/useAuthSession'
-import { isSupabaseConfigured, supabase } from './lib/supabase'
+import {
+  isSupabaseConfigured,
+  supabase,
+  supabaseConfigErrors,
+  supabaseConfigHostname,
+} from './lib/supabase'
 import { readAuthReturnPath } from './lib/adConversionLinks'
 import { consumeSignupPending, trackSignupCompletedFromSession } from './lib/landingAnalytics'
 import { normalizeAppRoute, useBrowserPath } from './hooks/useBrowserPath'
@@ -27,15 +32,31 @@ function SupabaseConfigMissing() {
         <p className="eyebrow">Trackora</p>
         <h1 className="auth-title">Sign-in isn&apos;t configured</h1>
         <p className="auth-subtitle">
-          For local development, add these to your project <code>.env</code> and restart the dev server:
+          {import.meta.env.PROD
+            ? 'This production build is missing valid Supabase settings. Redeploy after fixing Vercel environment variables.'
+            : 'Add these to your project .env and restart the dev server:'}
         </p>
         <p className="auth-config-hint">
           <code>VITE_SUPABASE_URL</code>
           <br />
           <code>VITE_SUPABASE_PUBLISHABLE_KEY</code>
         </p>
+        {supabaseConfigErrors.length > 0 && (
+          <ul className="auth-config-errors">
+            {supabaseConfigErrors.map(msg => (
+              <li key={msg}>{msg}</li>
+            ))}
+          </ul>
+        )}
+        {supabaseConfigHostname && (
+          <p className="auth-config-hint">
+            Resolved hostname: <code>{supabaseConfigHostname}</code>
+          </p>
+        )}
         <p className="auth-config-hint" style={{ marginTop: '1rem' }}>
-          Use the URL and publishable key from your hosted auth provider&apos;s dashboard.
+          In Vercel, use exactly <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_PUBLISHABLE_KEY</code> (not{' '}
+          <code>SUPABASE_URL</code> alone). Values must be set for <strong>Production</strong> and the app must be
+          rebuilt.
         </p>
       </div>
     </div>

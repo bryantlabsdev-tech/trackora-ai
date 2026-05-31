@@ -32,6 +32,7 @@ import { evaluateSubscriptionAccess, profileRowGrantsPremium } from '../shared/b
 import { effectivePremiumAccess, isOwnerFreePro } from '../shared/ownerFreePro.mjs'
 import { canUseRefinements, isElitePlan, isProPlan } from '../shared/planAccess.mjs'
 import {
+  computeNextRefinementState,
   effectiveRefinementCountThisMonth,
   parseRefinementRow,
   refinementMonthKeyUtc,
@@ -257,15 +258,15 @@ async function ensureRefinementMonthReset(userId, profile) {
  * @param {string | null} authEmail
  */
 function refinementQuotaForResponse(profile, authEmail) {
+  const used = effectiveRefinementCountThisMonth(profile)
   if (isElitePlan(profile, authEmail) || isOwnerFreePro(authEmail)) {
     return {
-      refinementUsedThisMonth: 0,
+      refinementUsedThisMonth: used,
       refinementLimit: PRO_MONTHLY_REFINEMENT_LIMIT,
       refinementRemaining: null,
       refinementUnlimited: true,
     }
   }
-  const used = effectiveRefinementCountThisMonth(profile)
   return {
     refinementUsedThisMonth: used,
     refinementLimit: PRO_MONTHLY_REFINEMENT_LIMIT,
@@ -275,35 +276,65 @@ function refinementQuotaForResponse(profile, authEmail) {
 }
 
 /**
- * Increment refinement usage after a successful OpenAI refine (Pro only; owner skips).
+ * Persist refinement usage after a successful OpenAI refine (Pro, Elite, and owner — all tracked).
  * @param {string} userId
  */
 async function incrementMonthlyRefinementCount(userId) {
-  if (!supabaseAdmin) return null
+  if (!supabaseAdmin) {
+    console.error('[refinement] supabaseAdmin not configured — cannot update profile')
+    return null
+  }
+
   const currentMonth = refinementMonthKeyUtc()
+
   const { data: row, error: readErr } = await supabaseAdmin
     .from('profiles')
     .select('refinement_count, refinement_month')
     .eq('id', userId)
     .maybeSingle()
+
+  const beforeCount = row ? parseRefinementRow(row).count : 0
+  const beforeMonth =
+    row && typeof row.refinement_month === 'string' ? row.refinement_month.trim() : row?.refinement_month ?? null
+
+  console.log('[refinement] before update', {
+    userId,
+    refinement_count: beforeCount,
+    refinement_month: beforeMonth,
+    current_month: currentMonth,
+  })
+
   if (readErr) {
     console.error('[refinement] read before increment', readErr.message)
     return null
   }
-  const eff = effectiveRefinementCountThisMonth(row)
-  const next = eff + 1
+
+  const nextState = computeNextRefinementState(row)
+
   const { data, error } = await supabaseAdmin
     .from('profiles')
-    .update({ refinement_count: next, refinement_month: currentMonth })
+    .update({
+      refinement_count: nextState.refinement_count,
+      refinement_month: nextState.refinement_month,
+    })
     .eq('id', userId)
     .select(
-      'id, email, is_pro, plan_tier, usage_count, subscription_status, current_period_end, refinement_count, refinement_month',
+      'id, email, is_pro, plan_tier, usage_count, subscription_status, current_period_end, refinement_count, refinement_month, coaching_workspace',
     )
     .single()
+
   if (error) {
     console.error('[refinement] increment failed', error.message)
     return null
   }
+
+  console.log('[refinement] after update', {
+    userId,
+    refinement_count: data?.refinement_count ?? nextState.refinement_count,
+    refinement_month: data?.refinement_month ?? nextState.refinement_month,
+    new_refinement_count: nextState.refinement_count,
+  })
+
   return data
 }
 
@@ -960,10 +991,8 @@ app.post('/api/ai', apiAiRateLimiter, async (req, res) => {
         }
       }
 
-      if (isProPlan(profile, authUserEmail)) {
-        const updatedProfile = await incrementMonthlyRefinementCount(authUserId)
-        if (updatedProfile) profile = updatedProfile
-      }
+      const updatedProfile = await incrementMonthlyRefinementCount(authUserId)
+      if (updatedProfile) profile = updatedProfile
 
       const usageOut = usageEnvelope(profile, authUserEmail)
       const rq = refinementQuotaForResponse(profile, authUserEmail)

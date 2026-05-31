@@ -88,6 +88,7 @@ GitHub Actions runs unit tests, production build, and E2E on push/PR to `main`.
 - Stripe webhooks pointed at `/webhook/stripe` with signing secret
 - `GET /api/health` for uptime checks
 - Staging: [docs/STAGING.md](./docs/STAGING.md) · Metrics: [docs/METRICS.md](./docs/METRICS.md)
+- Vercel login / Supabase env: [docs/PRODUCTION_SUPABASE_ENV.md](./docs/PRODUCTION_SUPABASE_ENV.md)
 - Mobile release: [docs/RELEASE.md](./docs/RELEASE.md)
 - See [docs/RUNBOOK.md](./docs/RUNBOOK.md) for billing and API troubleshooting
 

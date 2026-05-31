@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  computeNextRefinementState,
   effectiveRefinementCountThisMonth,
   getRefinementQuota,
   parseRefinementRow,
@@ -69,10 +70,34 @@ test('getRefinementQuota: Elite subscriber has unlimited refinements', () => {
       subscription_status: 'active',
       plan_tier: 'elite',
       email: 'e@example.com',
+      refinement_count: 4,
+      refinement_month: '2026-05',
     },
     25,
     'e@example.com',
+    new Date(Date.UTC(2026, 4, 10)),
   )
   assert.equal(q.unlimited, true)
   assert.equal(q.canRefine, true)
+  assert.equal(q.used, 4)
+})
+
+test('computeNextRefinementState resets to 1 on new month or null month', () => {
+  const now = new Date(Date.UTC(2026, 4, 10))
+  assert.deepEqual(computeNextRefinementState({ refinement_count: 9, refinement_month: null }, now), {
+    refinement_count: 1,
+    refinement_month: '2026-05',
+  })
+  assert.deepEqual(computeNextRefinementState({ refinement_count: 9, refinement_month: '2026-04' }, now), {
+    refinement_count: 1,
+    refinement_month: '2026-05',
+  })
+})
+
+test('computeNextRefinementState increments within same month', () => {
+  const now = new Date(Date.UTC(2026, 4, 10))
+  assert.deepEqual(computeNextRefinementState({ refinement_count: 2, refinement_month: '2026-05' }, now), {
+    refinement_count: 3,
+    refinement_month: '2026-05',
+  })
 })

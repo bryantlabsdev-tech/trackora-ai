@@ -39,6 +39,21 @@ export function effectiveRefinementCountThisMonth(profile, now = new Date()) {
 }
 
 /**
+ * Next refinement_count / refinement_month after one successful refine (UTC month).
+ * New or stale month → count 1; same month → increment by 1.
+ * @param {{ refinement_count?: unknown; refinement_month?: unknown } | null | undefined} profile
+ * @param {Date} [now]
+ */
+export function computeNextRefinementState(profile, now = new Date()) {
+  const currentMonth = refinementMonthKeyUtc(now)
+  const { count, monthKey } = parseRefinementRow(profile)
+  if (monthKey === currentMonth) {
+    return { refinement_count: count + 1, refinement_month: currentMonth }
+  }
+  return { refinement_count: 1, refinement_month: currentMonth }
+}
+
+/**
  * @param {number} limit
  * @param {{ refinement_count?: unknown; refinement_month?: unknown } | null | undefined} profile
  * @param {unknown} email
@@ -72,8 +87,9 @@ export function getRefinementQuota(profile, limit, sessionEmail) {
   }
   const planTier = getEffectivePlan(profile, email || profile.email)
   if (isElitePlan(profile, email || profile.email) || isOwnerFreePro(email)) {
+    const used = effectiveRefinementCountThisMonth(profile)
     return {
-      used: 0,
+      used,
       limit,
       remaining: Number.POSITIVE_INFINITY,
       unlimited: true,

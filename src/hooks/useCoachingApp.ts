@@ -493,6 +493,7 @@ export function useCoachingApp() {
         }
         if (result.refinementSnapshot) {
           applyRefinementSnapshot(result.refinementSnapshot)
+          void refresh()
         }
         setRefineOpenRowKey(null)
         setRefinePresetPick(null)
@@ -542,6 +543,7 @@ export function useCoachingApp() {
       input.employeeName,
       applyUsageSnapshot,
       applyRefinementSnapshot,
+      refresh,
       coachingWorkspace,
     ],
   )

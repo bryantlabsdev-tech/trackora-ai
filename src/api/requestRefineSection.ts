@@ -112,9 +112,7 @@ function mapSuccessToResult(data: ApiJson): RefineSectionResult | null {
   }
 
   let refinementSnapshot: RefineSectionResult['refinementSnapshot']
-  if (data.refinementUnlimited === true) {
-    refinementSnapshot = undefined
-  } else if (typeof data.refinementUsedThisMonth === 'number' && Number.isFinite(data.refinementUsedThisMonth)) {
+  if (typeof data.refinementUsedThisMonth === 'number' && Number.isFinite(data.refinementUsedThisMonth)) {
     refinementSnapshot = {
       refinement_count: Math.max(0, Math.floor(data.refinementUsedThisMonth)),
       refinement_month:
@@ -122,6 +120,11 @@ function mapSuccessToResult(data: ApiJson): RefineSectionResult | null {
           ? data.refinementMonth.trim()
           : null,
     }
+    console.log('[refinement] client received snapshot', {
+      refinement_count: refinementSnapshot.refinement_count,
+      refinement_month: refinementSnapshot.refinement_month,
+      refinementUnlimited: data.refinementUnlimited === true,
+    })
   }
 
   return { refinedText: refined, source: 'openai', usage, refinementSnapshot }
