@@ -71,11 +71,10 @@ export function ProfileProvider({ children, userId, email, client }: ProviderPro
       setLoading(false)
       return
     }
-    if (ensured.stripe_customer_id?.trim() || ensured.stripe_subscription_id?.trim()) {
-      await reconcileStripeSubscription(client)
-      const refreshed = await fetchProfile(client, userId)
-      if (refreshed) ensured = refreshed
-    }
+    // Also recover legacy payments whose webhook never linked billing IDs.
+    await reconcileStripeSubscription(client)
+    const refreshed = await fetchProfile(client, userId)
+    if (refreshed) ensured = refreshed
     const shadow = readUsageShadow()
     const mergedUsage =
       hasPremiumAccess(ensured) || shadow == null
