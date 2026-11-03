@@ -71,8 +71,9 @@ export function proRefinementRemaining(limit, profile, email, now = new Date()) 
  * @param {number} limit
  * @param {{ refinement_count?: unknown; refinement_month?: unknown; email?: unknown; is_pro?: unknown; subscription_status?: unknown } | null | undefined} profile
  * @param {unknown} sessionEmail – auth email if different from profile.email
+ * @param {Date} [now] – clock used for the monthly usage calculation
  */
-export function getRefinementQuota(profile, limit, sessionEmail) {
+export function getRefinementQuota(profile, limit, sessionEmail, now = new Date()) {
   const email = String(sessionEmail ?? profile?.email ?? '').trim().toLowerCase()
   if (!profile) {
     return {
@@ -87,7 +88,7 @@ export function getRefinementQuota(profile, limit, sessionEmail) {
   }
   const planTier = getEffectivePlan(profile, email || profile.email)
   if (isElitePlan(profile, email || profile.email) || isOwnerFreePro(email)) {
-    const used = effectiveRefinementCountThisMonth(profile)
+    const used = effectiveRefinementCountThisMonth(profile, now)
     return {
       used,
       limit,
@@ -109,7 +110,7 @@ export function getRefinementQuota(profile, limit, sessionEmail) {
       planTier,
     }
   }
-  const used = effectiveRefinementCountThisMonth(profile)
+  const used = effectiveRefinementCountThisMonth(profile, now)
   const remaining = Math.max(0, limit - used)
   return {
     used,

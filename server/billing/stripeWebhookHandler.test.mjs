@@ -110,3 +110,41 @@ describe('handleStripeWebhookEvent', () => {
     assert.equal(calls.includes('retrieve:sub_fallback'), true)
   })
 })
+
+it('retries the same event after a transient Stripe failure', async () => {
+  resetStripeEventIdempotencyForTests()
+  let attempts = 0
+  const event = { id: 'evt_retry', type: 'checkout.session.completed', data: { object: { subscription: 'sub_retry' } } }
+  const deps = { stripe: { subscriptions: { retrieve: async () => { attempts++; throw new Error('temporary outage') } } } }
+  const first = mockRes()
+  const second = mockRes()
+  await handleStripeWebhookEvent(event, first, deps)
+  await handleStripeWebhookEvent(event, second, deps)
+  assert.equal(first.state.statusCode, 500)
+  assert.equal(second.state.statusCode, 500)
+  assert.equal(attempts, 2)
+})
+
+it('does not deduplicate a failed profile sync', async () => {
+  resetStripeEventIdempotencyForTests()
+  let attempts = 0
+  const event = { id: 'evt_sync_retry', type: 'customer.subscription.updated', data: { object: { id: 'sub_sync' } } }
+  const deps = {
+    stripe: { subscriptions: { retrieve: async () => { attempts++; return { id: 'sub_sync', status: 'active' } } } },
+    respondStripeWebhookSync: r => r.status(500).json({ received: false }),
+  }
+  await handleStripeWebhookEvent(event, mockRes(), deps)
+  await handleStripeWebhookEvent(event, mockRes(), deps)
+  assert.equal(attempts, 2)
+})
+
+it('uses the modern invoice subscription reference without guessing another subscription', async () => {
+  resetStripeEventIdempotencyForTests()
+  const retrieved = []
+  const event = { id: 'evt_modern_invoice', type: 'invoice.paid', data: { object: { parent: { subscription_details: { subscription: 'sub_correct' } } } } }
+  await handleStripeWebhookEvent(event, mockRes(), {
+    stripe: { subscriptions: { retrieve: async id => { retrieved.push(id); return { id, status: 'active' } } } },
+    respondStripeWebhookSync: r => r.status(200).json({ received: true }),
+  })
+  assert.deepEqual(retrieved, ['sub_correct'])
+})

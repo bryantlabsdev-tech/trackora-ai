@@ -1,5 +1,5 @@
 import { pickStripeId, syncSubscriptionToUser } from './sync.mjs'
-import { isDuplicateStripeEvent } from './webhookIdempotency.mjs'
+import { isDuplicateStripeEvent, markStripeEventProcessed } from './webhookIdempotency.mjs'
 
 /**
  * @typedef {{
@@ -15,6 +15,15 @@ import { isDuplicateStripeEvent } from './webhookIdempotency.mjs'
  * @param {StripeWebhookDeps} deps
  */
 export async function handleStripeWebhookEvent(event, res, deps) {
+  if (isDuplicateStripeEvent(event.id)) return res.status(200).json({ received: true, duplicate: true })
+  const result = await processStripeWebhookEvent(event, res, deps)
+  // A failed sync must remain retryable. Previously even 500 responses were cached.
+  const status = res.statusCode ?? res.state?.statusCode
+  if (status >= 200 && status < 300) markStripeEventProcessed(event.id)
+  return result
+}
+
+async function processStripeWebhookEvent(event, res, deps) {
   const { stripe, respondStripeWebhookSync } = deps
 
   /**
@@ -55,11 +64,6 @@ export async function handleStripeWebhookEvent(event, res, deps) {
       metadataUserId,
     })
     return respondStripeWebhookSync(res, eventType, result)
-  }
-
-  if (isDuplicateStripeEvent(event.id)) {
-    console.log('[webhook/stripe] duplicate event id skipped', event.id, event.type)
-    return res.status(200).json({ received: true, duplicate: true })
   }
 
   console.log('[webhook/stripe] event type:', event.type, 'id:', event.id)
@@ -105,7 +109,7 @@ export async function handleStripeWebhookEvent(event, res, deps) {
       event.type === 'customer.subscription.updated' ||
       event.type === 'customer.subscription.deleted'
     ) {
-      const subscription = event.data.object
+      const subscription = await stripe.subscriptions.retrieve(event.data.object.id)
       const metadataUserId =
         subscription.metadata && typeof subscription.metadata.userId === 'string'
           ? subscription.metadata.userId
@@ -134,7 +138,7 @@ export async function handleStripeWebhookEvent(event, res, deps) {
     ) {
       const invoice = event.data.object
       const customerId = pickStripeId(invoice.customer)
-      const subscriptionId = pickStripeId(invoice.subscription)
+      const subscriptionId = pickStripeId(invoice.subscription) || pickStripeId(invoice.parent?.subscription_details?.subscription)
       const invoiceEmail =
         typeof invoice.customer_email === 'string' && invoice.customer_email.trim()
           ? invoice.customer_email.trim()

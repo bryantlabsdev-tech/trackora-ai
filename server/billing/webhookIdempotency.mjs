@@ -23,7 +23,6 @@ export function isDuplicateStripeEvent(eventId) {
   if (!eventId || typeof eventId !== 'string') return false
   prune()
   if (processed.has(eventId)) return true
-  processed.set(eventId, Date.now())
   return false
 }
 

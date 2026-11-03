@@ -1,3 +1,4 @@
+import { createSafeCheckout, findExistingBilling } from './billing/safeCheckout.mjs'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -430,20 +431,13 @@ app.post('/create-checkout-session', async (req, res) => {
     return res.status(503).json({ error: 'APP_URL is not configured.' })
   }
 
-  const userId = checkoutParsed.data.userId
-  const emailMeta = checkoutParsed.data.email?.trim() ?? ''
+  const auth = await getAuthenticatedUserId(req)
+  if (auth.error || !auth.userId) return res.status(401).json({ error: auth.error || 'Unauthorized.' })
+  if (checkoutParsed.data.userId !== auth.userId) return res.status(403).json({ error: 'Account mismatch.' })
+  const userId = auth.userId
+  const profileResult = await getProfileForUser(userId)
+  if (!profileResult.profile || profileResult.error) return res.status(503).json({ error: 'Could not verify billing. Please try again later.' })
   const checkoutPlan = checkoutParsed.data.planTier === 'elite' ? 'elite' : 'pro'
-  const checkoutMetadata = {
-    userId,
-    planTier: checkoutPlan,
-    ...(emailMeta ? { email: emailMeta } : {}),
-  }
-  console.log('[create-checkout-session] checkout metadata (safe):', {
-    userId,
-    emailAttached: Boolean(emailMeta),
-    planTier: checkoutPlan,
-  })
-
   if (checkoutPlan === 'elite') {
     return res.status(400).json({
       error:
@@ -455,17 +449,8 @@ app.post('/create-checkout-session', async (req, res) => {
 
   try {
     console.log('[create-checkout-session] Stripe price id:', priceId, 'plan:', checkoutPlan)
-    const session = await stripe.checkout.sessions.create({
-      mode: 'subscription',
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${appUrl}`,
-      metadata: checkoutMetadata,
-      client_reference_id: userId,
-      subscription_data: {
-        metadata: { userId },
-      },
-    })
+    const session = await createSafeCheckout({ stripe, profile: profileResult.profile,
+      userId, email: auth.email, planTier: checkoutPlan, priceId, appUrl, priceIds: [...configuredProPriceIds(), stripeElitePriceId] })
     if (!session.url) {
       return res.status(500).json({ error: 'Checkout session missing URL.' })
     }
@@ -473,6 +458,14 @@ app.post('/create-checkout-session', async (req, res) => {
     return res.json({ url: session.url })
   } catch (e) {
     const message = typeof e?.message === 'string' ? e.message : 'Checkout session failed'
+    if (e?.subscription) {
+      try {
+        await syncSubscriptionToUser({ eventType: 'checkout.existing', customerId: pickStripeId(e.subscription.customer), subscription: e.subscription, metadataUserId: userId })
+      } catch (syncError) {
+        console.error('[checkout.existing] billing sync failed', syncError?.message)
+      }
+    }
+    if (e?.code === 'EXISTING_SUBSCRIPTION' || e?.code === 'CHECKOUT_ALREADY_OPEN') return res.status(409).json({ error: message, code: e.code })
     console.error('[create-checkout-session]', message)
     return res.status(500).json({ error: message })
   }
@@ -644,7 +637,7 @@ async function handleStartElite(req, res) {
   if (!profileResult.profile || profileResult.error) {
     return res.status(500).json({ ok: false, error: profileResult.error || 'Could not load profile.' })
   }
-  const profile = profileResult.profile
+  let profile = profileResult.profile
   const sessionEmail = auth.email ?? profile.email ?? null
 
   if (isElitePlan(profile, sessionEmail) || isOwnerFreePro(sessionEmail)) {
@@ -655,23 +648,23 @@ async function handleStartElite(req, res) {
     })
   }
 
+  // Recover paid access before deciding whether Elite needs a new subscription.
+  try {
+    const { existing } = await findExistingBilling(stripe, profile, auth.userId, auth.email, [...configuredProPriceIds(), stripeElitePriceId])
+    if (existing) {
+      const result = await syncSubscriptionToUser({ eventType: 'elite.existing', customerId: pickStripeId(existing.customer), subscription: existing, metadataUserId: auth.userId })
+      if (!result.ok) return res.status(503).json({ ok: false, error: 'Could not verify billing. Please try again later.' })
+      profile = { ...profile, ...result.updatePayload }
+      if (!evaluateSubscriptionAccess(existing).isPro) return res.status(409).json({ ok: false, error: 'An existing subscription needs attention. Use Manage subscription instead of paying for a new plan.' })
+    }
+  } catch {
+    return res.status(503).json({ ok: false, error: 'Could not verify billing. Please try again later.' })
+  }
+
   if (!effectivePremiumAccess(profile, sessionEmail)) {
     try {
-      const session = await stripe.checkout.sessions.create({
-        mode: 'subscription',
-        line_items: [{ price: stripeElitePriceId, quantity: 1 }],
-        success_url: `${appUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${appUrl}`,
-        metadata: {
-          userId: auth.userId,
-          planTier: 'elite',
-          ...(typeof profile.email === 'string' && profile.email.trim() ? { email: profile.email.trim() } : {}),
-        },
-        client_reference_id: auth.userId,
-        subscription_data: {
-          metadata: { userId: auth.userId, planTier: 'elite' },
-        },
-      })
+      const session = await createSafeCheckout({ stripe, profile, userId: auth.userId,
+        email: auth.email, planTier: 'elite', priceId: stripeElitePriceId, appUrl, priceIds: [...configuredProPriceIds(), stripeElitePriceId] })
       if (!session.url) {
         return res.status(500).json({ ok: false, error: 'Checkout session missing URL.' })
       }

@@ -7,7 +7,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server/index.mjs",
-    "test": "node --test shared/*.test.mjs shared/__tests__/*.test.mjs server/**/*.test.mjs server/**/*.integration.test.mjs",
+    "test": "node --test shared/*.test.mjs shared/__tests__/*.test.mjs server/*.test.mjs server/*/*.test.mjs",
     "test:e2e": "playwright test",
     "test:e2e:smoke": "playwright test e2e/api-health.spec.ts e2e/landing-static.spec.ts",
     "test:all": "npm test && npm run test:e2e",

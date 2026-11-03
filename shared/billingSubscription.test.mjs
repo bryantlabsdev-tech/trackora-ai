@@ -70,3 +70,7 @@ describe('profileRowGrantsPremium (matches client hasPremiumAccess)', () => {
     )
   })
 })
+
+test('reads billing period from modern Stripe subscription items', () => {
+  assert.equal(evaluateSubscriptionAccess({ status: 'active', items: { data: [{ current_period_end: 1800000000 }] } }).currentPeriodEndIso, new Date(1800000000000).toISOString())
+})

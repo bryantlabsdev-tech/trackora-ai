@@ -34,7 +34,8 @@ export function toIsoFromUnixSeconds(unixSeconds) {
 export function evaluateSubscriptionAccess(subscription) {
   const status = typeof subscription.status === 'string' ? subscription.status : null
   const currentPeriodEndUnix =
-    typeof subscription.current_period_end === 'number' ? subscription.current_period_end : null
+    typeof subscription.current_period_end === 'number' ? subscription.current_period_end :
+      Math.min(...(subscription.items?.data ?? []).map(item => item.current_period_end).filter(value => Number.isFinite(value) && value > 0))
   const currentPeriodEndIso = toIsoFromUnixSeconds(currentPeriodEndUnix)
   const isPro = stripeSubscriptionStatusGrantsPro(status)
 

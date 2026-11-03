@@ -1,3 +1,4 @@
+import { supabase } from '../../lib/supabase'
 import { useState } from 'react'
 import { startEliteUpgrade } from '../../api/startEliteUpgrade'
 import { getCreateCheckoutSessionUrl } from '../../lib/apiBase'
@@ -72,9 +73,11 @@ export function UpgradeToProButton({
         planTier: checkoutPlan,
       }
 
+      if (!supabase) throw new Error('Authentication is unavailable.')
+      const { data: sessionData } = await supabase.auth.getSession()
       const res = await fetch(getCreateCheckoutSessionUrl(), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionData.session?.access_token ?? ''}` },
         body: JSON.stringify(payload),
       })
       const data = (await res.json()) as { url?: string; error?: string }
