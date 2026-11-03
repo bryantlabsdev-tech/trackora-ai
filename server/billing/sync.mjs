@@ -1,9 +1,11 @@
+import { findExistingBilling } from './safeCheckout.mjs'
 import { evaluateSubscriptionAccess } from '../../shared/billingSubscription.mjs'
 import { inferBillingPlanTierFromSubscription } from '../../shared/stripePlanTier.mjs'
 import {
   stripe,
   supabaseAdmin,
   stripeElitePriceId,
+  configuredProPriceIds,
   billingReconcileCooldown,
   BILLING_RECONCILE_COOLDOWN_MS,
 } from '../config.mjs'
@@ -66,9 +68,23 @@ export async function resolveProfileIdForBilling(customerId, subscriptionId, met
  * }} params
  */
 export async function syncSubscriptionToUser(params) {
-  const { eventType, customerId, customerEmail = null, subscription, metadataUserId } = params
-  const subscriptionId = pickStripeId(subscription.id)
+  let { eventType, customerId, customerEmail = null, subscription, metadataUserId } = params
+  let subscriptionId = pickStripeId(subscription.id)
   const profileId = await resolveProfileIdForBilling(customerId, subscriptionId, metadataUserId)
+  // A canceled/failed legacy duplicate must not revoke another paid subscription.
+  if (stripe && supabaseAdmin && profileId && !evaluateSubscriptionAccess(subscription).isPro) {
+    const { data: row, error } = await supabaseAdmin.from('profiles')
+      .select('stripe_subscription_id, stripe_customer_id, email').eq('id', profileId).maybeSingle()
+    if (error) return { ok: false, skipped: 'profile_load_error', error: error.message }
+    if (row) {
+      const { existing } = await findExistingBilling(stripe, row, profileId, row.email, [...configuredProPriceIds(), stripeElitePriceId])
+      if (existing && evaluateSubscriptionAccess(existing).isPro) {
+        subscription = existing
+        subscriptionId = pickStripeId(existing.id)
+        customerId = pickStripeId(existing.customer)
+      }
+    }
+  }
   const access = evaluateSubscriptionAccess(subscription)
   const normalizedStatus = String(access.subscriptionStatus ?? '').toLowerCase()
   const isDowngradeStatus =
@@ -164,7 +180,7 @@ export async function reconcileStripeSubscriptionForUser(userId, opts = {}) {
 
   const { data: row, error } = await supabaseAdmin
     .from('profiles')
-    .select('stripe_subscription_id, stripe_customer_id')
+    .select('stripe_subscription_id, stripe_customer_id, email')
     .eq('id', userId)
     .maybeSingle()
 
@@ -177,33 +193,14 @@ export async function reconcileStripeSubscriptionForUser(userId, opts = {}) {
     return { ok: false, skipped: 'no_profile' }
   }
 
-  let subscriptionId =
-    row.stripe_subscription_id && typeof row.stripe_subscription_id === 'string'
-      ? row.stripe_subscription_id.trim()
-      : ''
-  const customerIdRaw =
-    row.stripe_customer_id && typeof row.stripe_customer_id === 'string' ? row.stripe_customer_id.trim() : ''
-
-  if (!subscriptionId && customerIdRaw) {
-    try {
-      const list = await stripe.subscriptions.list({
-        customer: customerIdRaw,
-        status: 'all',
-        limit: 10,
-      })
-      const prefer = ['active', 'trialing', 'past_due', 'unpaid', 'canceled', 'incomplete']
-      for (const st of prefer) {
-        const hit = list.data.find((s) => s.status === st)
-        if (hit?.id) {
-          subscriptionId = hit.id
-          break
-        }
-      }
-    } catch (e) {
-      const msg = typeof e?.message === 'string' ? e.message : 'list failed'
-      console.error('[billing-reconcile] subscription list failed:', msg)
-      return { ok: false, skipped: 'stripe_list_error', error: msg }
-    }
+  let subscriptionId
+  let customerIdRaw = row.stripe_customer_id || ''
+  try {
+    const billing = await findExistingBilling(stripe, row, userId, row.email, [...configuredProPriceIds(), stripeElitePriceId])
+    subscriptionId = billing.existing?.id || row.stripe_subscription_id || ''
+    customerIdRaw = billing.customerId || customerIdRaw
+  } catch (e) {
+    return { ok: false, skipped: 'stripe_list_error', error: e?.message || 'Billing lookup failed' }
   }
 
   if (!subscriptionId) {
